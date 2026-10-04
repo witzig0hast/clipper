@@ -23,13 +23,21 @@ npm run dist        # -> dist\Clipper Setup 1.0.0.exe
 ```
 **Entwickeln:** `npm start` · Tests: `npm test`
 
+## Performance (wichtig fürs Gaming)
+Das Bild wird **direkt über ffmpeg** aufgenommen: Windows Desktop Duplication → Hardware-Encoder
+(**NVIDIA NVENC / AMD AMF / Intel QuickSync**), also fast ohne FPS-Verlust – ähnlich wie ShadowPlay/OBS.
+Nur wenn keine GPU-Encoder funktionieren, fällt Clipper auf x264 (CPU) zurück; das zeigt die App in Gelb an.
+Der Ton kommt separat (Systemton/Mikrofon) und wird beim Clip anhand der Uhrzeit exakt zum Bild gelegt.
+Der Aufnahme-Prozess läuft mit niedriger Priorität. Tipp: Auflösung „Original“ ist am schlankesten
+(Skalieren muss auf der CPU passieren), 60 FPS reichen für Clips.
+
 ## Hinweise
 - Spiele am besten in **„Vollbild-Fenster“ / „Rahmenlos“** laufen lassen. Bei exklusivem Vollbild kann das Bild schwarz sein.
 - Der Puffer liegt als temporäre Segmente in `%APPDATA%\Clipper\buffer` (ca. 1,8 GB bei 20 min / 12 Mbit/s) und wird beim Beenden gelöscht.
 - Schließen (X) schickt Clipper in den Tray; Beenden über Rechtsklick auf das Tray-Icon.
 
 ## So funktioniert es
-Der Renderer nimmt den Bildschirm per Chromium-Capture auf und gibt alle 10 s ein (leicht überlappendes)
-WebM-Segment an den Hauptprozess, der nur die letzten N Minuten behält. Beim Clip wird der laufende
-Abschnitt „geflusht“, die passenden Segmente werden per ffmpeg zusammengesetzt und als MP4 kodiert
+ffmpeg schreibt das Bild fortlaufend als 10-s-MPEG-TS-Segmente (`src/main/capture.js`), der Renderer den
+Ton als kurze, leicht überlappende WebM-Segmente. Der Hauptprozess behält nur die letzten N Minuten.
+Beim Clip werden beide Spuren per Wanduhrzeit zugeschnitten, synchronisiert und als MP4 kodiert
 (`src/main/timeline.js`, `src/main/exporter.js`).

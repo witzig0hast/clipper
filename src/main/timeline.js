@@ -53,6 +53,24 @@ function planClip(segments, seconds) {
   return { parts, duration };
 }
 
+/**
+ * Teile, die das Zeitfenster [ws, we] (ms, Wanduhr) abdecken.
+ * outpoint kürzt jedes Segment auf seinen nutzbaren Bereich; firstFrom = Wanduhrzeit,
+ * ab der das erste Segment Material liefert.
+ */
+function planWindow(segments, ws, we) {
+  const parts = [];
+  let firstFrom = null;
+  for (const s of usableIntervals(segments)) {
+    if (s.to <= ws || s.from >= we) continue;
+    const outpoint = (Math.min(s.to, we) - s.from) / 1000;
+    if (outpoint < 0.05) continue;
+    if (firstFrom === null) firstFrom = s.from;
+    parts.push({ file: s.file, outpoint });
+  }
+  return { parts, firstFrom };
+}
+
 /** Segmente, die älter als das Puffer-Limit sind. */
 function expiredSegments(segments, keepSeconds, slackSeconds = 20) {
   const end = bufferEnd(segments);
@@ -61,4 +79,4 @@ function expiredSegments(segments, keepSeconds, slackSeconds = 20) {
   return segments.filter((s) => s.endedAt < limit);
 }
 
-module.exports = { usableIntervals, bufferEnd, bufferedSeconds, planClip, expiredSegments };
+module.exports = { planWindow, usableIntervals, bufferEnd, bufferedSeconds, planClip, expiredSegments };

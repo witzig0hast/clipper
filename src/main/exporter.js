@@ -6,14 +6,16 @@ const os = require('os');
 const path = require('path');
 
 function resolveFfmpeg() {
+  if (process.env.CLIPPER_FFMPEG) return process.env.CLIPPER_FFMPEG; // z. B. für Tests/Entwicklung
   let p = require('ffmpeg-static');
   if (p && p.includes('app.asar')) p = p.replace('app.asar', 'app.asar.unpacked');
   return p;
 }
 
-function run(ffmpeg, args, { onProgress, totalSeconds } = {}) {
+function run(ffmpeg, args, { onProgress, totalSeconds, timeout } = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { windowsHide: true });
+    const timer = timeout ? setTimeout(() => proc.kill(), timeout) : null;
     let err = '';
     let buf = '';
     proc.stdout.on('data', (d) => {
@@ -35,6 +37,7 @@ function run(ffmpeg, args, { onProgress, totalSeconds } = {}) {
     });
     proc.on('error', reject);
     proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg beendet mit Code ${code}\n${err.slice(-1500)}`));
     });
@@ -73,35 +76,51 @@ function videoArgs(encoder, { fps, bitrateMbps }) {
 
 function q(p) { return p.replace(/\\/g, '/').replace(/'/g, "'\\''"); }
 
+async function writeList(parts) {
+  const list = parts.map((p) => `file '${q(p.file)}'\noutpoint ${p.outpoint.toFixed(3)}`).join('\n');
+  const f = path.join(os.tmpdir(), `clipper-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.txt`);
+  await fs.promises.writeFile(f, list);
+  return f;
+}
+
 /**
- * Baut aus geplanten Segment-Teilen eine MP4-Datei.
- * @param parts [{file,inpoint,outpoint}]
+ * Baut aus Video-Segmenten (.ts) und Audio-Segmenten (.webm) eine MP4-Datei.
+ * plan = { ws, we, video:{parts,firstFrom}, audio:{parts,firstFrom}|null }  (Zeiten in ms, Wanduhr)
+ * Der Ton wird anhand der Wanduhrzeiten exakt zum Bild ausgerichtet.
  */
-async function exportClip(ffmpeg, parts, outFile, opts) {
+async function exportClip(ffmpeg, plan, outFile, opts) {
   const { fps = 60, bitrateMbps = 12, encoder = 'libx264', onProgress } = opts || {};
-  const total = parts.reduce((s, p) => s + (p.outpoint - p.inpoint), 0);
-  // Der concat-Demuxer kann bei MediaRecorder-WebM (ohne Seek-Index) kein "inpoint".
-  // Nur das erste Segment hat einen Anfangs-Versatz -> der wird per Output-Seek verworfen.
-  const skip = parts.length ? parts[0].inpoint : 0;
-  const list = parts
-    .map((p) => `file '${q(p.file)}'\noutpoint ${p.outpoint.toFixed(3)}`)
-    .join('\n');
-  const listFile = path.join(os.tmpdir(), `clipper-${process.pid}-${Date.now()}.txt`);
-  await fs.promises.writeFile(listFile, list);
+  const { ws, we, video, audio } = plan;
+  const T = Math.max(ws, video.firstFrom);          // Nullpunkt des Clips
+  const dur = (we - T) / 1000;
+  if (dur < 0.2) throw new Error('Zu wenig Material im Puffer.');
+  const vSkip = (T - video.firstFrom) / 1000;
+  const lists = [await writeList(video.parts)];
+  const inputs = ['-f', 'concat', '-safe', '0', '-i', lists[0]];
+  let graph = `[0:v]trim=start=${vSkip.toFixed(3)}:duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,fps=${fps},format=yuv420p[v]`;
+  const maps = ['-map', '[v]'];
+  if (audio && audio.parts.length) {
+    lists.push(await writeList(audio.parts));
+    inputs.push('-f', 'concat', '-safe', '0', '-i', lists[1]);
+    const aSkip = Math.max(0, T - audio.firstFrom) / 1000;
+    const delay = Math.max(0, Math.round(audio.firstFrom - T));
+    graph += `;[1:a]atrim=start=${aSkip.toFixed(3)},asetpts=PTS-STARTPTS,aresample=48000`
+      + (delay ? `,adelay=${delay}|${delay}` : '') + ',apad[a]';
+    maps.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
+  } else {
+    maps.push('-an');
+  }
   try {
     await run(ffmpeg, [
       '-hide_banner', '-loglevel', 'error', '-y', '-progress', 'pipe:1', '-nostats',
-      '-f', 'concat', '-safe', '0', '-i', listFile,
-      ...(skip > 0.001 ? ['-ss', skip.toFixed(3)] : []),
-      '-vf', `fps=${fps},format=yuv420p`,
+      ...inputs, '-filter_complex', graph, ...maps,
       ...videoArgs(encoder, { fps, bitrateMbps }),
-      '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
-      '-movflags', '+faststart',
-      outFile,
-    ], { onProgress, totalSeconds: total });
+      '-t', dur.toFixed(3), '-movflags', '+faststart', outFile,
+    ], { onProgress, totalSeconds: dur });
   } finally {
-    fs.promises.unlink(listFile).catch(() => {});
+    for (const l of lists) fs.promises.unlink(l).catch(() => {});
   }
+  return dur;
 }
 
 /** Schneidet einen vorhandenen Clip (Re-Encode für exakte Schnitte). */
@@ -126,4 +145,4 @@ async function makeThumbnail(ffmpeg, inFile, outFile, at = 1) {
   ]);
 }
 
-module.exports = { resolveFfmpeg, detectEncoder, exportClip, trimClip, makeThumbnail };
+module.exports = { run, videoArgs, resolveFfmpeg, detectEncoder, exportClip, trimClip, makeThumbnail };

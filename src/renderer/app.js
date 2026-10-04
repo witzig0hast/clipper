@@ -110,10 +110,19 @@ function renderState() {
   $('#meterFill').style.width = `${Math.min(100, (s.bufferSeconds / s.bufferMax) * 100)}%`;
   $('#bufSize').textContent = `${fmtBytes(s.bufferBytes)} Zwischenspeicher`;
   const encNames = { h264_nvenc: 'NVIDIA NVENC', h264_amf: 'AMD AMF', h264_qsv: 'Intel QuickSync', libx264: 'CPU (x264)' };
-  $('#encChip').textContent = `Export: ${encNames[s.encoder] || s.encoder}`;
+  const cap = s.capture;
+  const chip = $('#encChip');
+  if (cap) {
+    const soft = cap.enc === 'libx264';
+    chip.textContent = `Aufnahme: ${encNames[cap.enc]}${soft ? ' – belastet die CPU' : ' (GPU)'}`;
+    chip.style.color = soft ? 'var(--warn)' : 'var(--ok)';
+  } else {
+    chip.textContent = s.hwEncoder ? `Encoder: ${encNames[s.hwEncoder]}` : 'Encoder wird geprüft …';
+    chip.style.color = '';
+  }
   $('#encHint').textContent = s.hwEncoder
-    ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte beim Export.`
-    : 'Keine Hardware-Encoder gefunden – der Prozessor wird genutzt.';
+    ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte für Aufnahme und Export – kaum FPS-Verlust.`
+    : 'Keine Hardware-Encoder gefunden – der Prozessor wird genutzt (kann FPS kosten).';
 
   const max = Math.max(5, Math.floor(s.bufferSeconds));
   const slider = $('#clipLen');

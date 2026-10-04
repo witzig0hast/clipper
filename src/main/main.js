@@ -13,6 +13,7 @@ const settingsStore = require('./settings');
 const { detectGame, listProcesses, DEFAULT_GAMES } = require('./games');
 const timeline = require('./timeline');
 const exporter = require('./exporter');
+const { VideoCapture } = require('./capture');
 
 const APP_ID = 'de.hastnetwork.clipper';
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
@@ -26,12 +27,15 @@ let quitting = false;
 let ffmpeg = null;
 let encoder = 'libx264';
 let hwEncoder = null;
+let video = null;
 
 // ---- Zustand ---------------------------------------------------------------
 const state = {
   game: null,          // erkannter Spiel-Prozess
   override: null,      // true/false = manuell erzwungen, null = automatisch
-  rendererActive: false,
+  rendererActive: false,   // Audio-Recorder im Renderer läuft
+  videoActive: false,      // ffmpeg-Bildschirmaufnahme läuft
+  videoKey: '',
   error: null,
   exports: 0,
   lastDesired: false,
@@ -60,22 +64,25 @@ const desired = () => (state.override !== null ? state.override : modeWantsRecor
 function bufferBytes() {
   let n = 0;
   for (const s of segments.values()) n += s.size || 0;
+  for (const v of video.segments()) { try { n += fs.statSync(v.file).size; } catch { /* egal */ } }
   return n;
 }
 const segList = () => [...segments.values()].filter((s) => s.endedAt > s.startedAt);
 
 function publicState() {
   return {
-    recording: state.rendererActive,
+    recording: state.videoActive,
     desired: desired(),
     mode: cfg().mode,
     override: state.override,
     game: state.game,
-    bufferSeconds: timeline.bufferedSeconds(segList()),
+    bufferSeconds: timeline.bufferedSeconds(video.segments()),
     bufferBytes: bufferBytes(),
     bufferMax: cfg().bufferMinutes * 60,
     encoder,
     hwEncoder,
+    capture: video.combo,
+    audioActive: state.rendererActive,
     error: state.error,
     exports: state.exports,
     clipsDir: cfg().clipsDir,
@@ -83,22 +90,39 @@ function publicState() {
 }
 const broadcastState = () => { send('state', publicState()); updateTray(); };
 
-function captureConfig() {
+const audioConfig = () => {
   const s = cfg();
-  return {
-    fps: s.fps, resolution: s.resolution, bitrateMbps: s.bitrateMbps,
-    systemAudio: s.systemAudio, micAudio: s.micAudio, micDeviceId: s.micDeviceId, screenId: s.screenId,
-  };
+  return { systemAudio: s.systemAudio, micAudio: s.micAudio, micDeviceId: s.micDeviceId, bitrateMbps: 0 };
+};
+
+/** Welcher Monitor (Index für Desktop Duplication + Rechteck für GDI)? */
+async function resolveDisplay() {
+  const displays = screen.getAllDisplays();
+  let display = screen.getPrimaryDisplay();
+  try {
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+    const src = sources.find((x) => x.id === cfg().screenId);
+    if (src) display = displays.find((d) => String(d.id) === String(src.display_id)) || display;
+  } catch { /* Hauptbildschirm */ }
+  let b = display.bounds;
+  if (process.platform === 'win32' && screen.dipToScreenRect) b = screen.dipToScreenRect(null, b);
+  return { outputIdx: Math.max(0, displays.findIndex((d) => d.id === display.id)), rect: { x: b.x, y: b.y, width: b.width, height: b.height } };
 }
+const videoConfig = async () => {
+  const s = cfg();
+  return { fps: s.fps, resolution: s.resolution, bitrateMbps: s.bitrateMbps, ...(await resolveDisplay()) };
+};
 
 // ---- Puffer ----------------------------------------------------------------
 function clearBuffer() {
+  video.clear();
   for (const s of segments.values()) fs.promises.unlink(s.file).catch(() => {});
   segments.clear();
 }
 
 function pruneBuffer() {
   const keep = cfg().bufferMinutes * 60;
+  video.prune(keep, (f) => pinned.has(f));
   for (const s of timeline.expiredSegments(segList(), keep)) {
     if (pinned.has(s.file)) continue;
     segments.delete(s.id);
@@ -141,11 +165,31 @@ function flushRecorder() {
 }
 
 // ---- Aufnahme-Steuerung ----------------------------------------------------
+let videoQueue = Promise.resolve();
+function syncVideo(want) {
+  videoQueue = videoQueue.then(async () => {
+    const wantKey = want ? JSON.stringify([cfg().fps, cfg().resolution, cfg().bitrateMbps, cfg().screenId, cfg().encoder]) : '';
+    if (wantKey === state.videoKey && video.running === want) return;
+    if (video.running) await video.stop();
+    state.videoKey = '';
+    if (want) {
+      try {
+        await video.start(await videoConfig(), cfg().encoder === 'cpu');
+        state.videoKey = wantKey; state.error = null;
+      } catch (e) { state.error = e.message; toast(`Aufnahme-Fehler: ${e.message}`, 'error'); }
+    }
+    state.videoActive = video.running;
+    broadcastState();
+  }).catch(() => {});
+  return videoQueue;
+}
+
 function applyRecording() {
   const want = desired();
   if (want && !state.lastDesired) { clearBuffer(); state.error = null; }
   state.lastDesired = want;
-  send('recording:set', { on: want, config: captureConfig() });
+  send('recording:set', { on: want, config: audioConfig() });
+  syncVideo(want);
   broadcastState();
 }
 
@@ -204,14 +248,21 @@ async function createClip(seconds) {
   const pin = [];
   try {
     await flushRecorder();
-    const { parts, duration } = timeline.planClip(segList(), seconds);
-    if (!parts.length) throw new Error('Der Puffer ist noch leer – es läuft noch keine Aufnahme.');
-    for (const p of parts) { pinned.add(p.file); pin.push(p.file); }
+    const vsegs = video.segments();
+    if (!vsegs.length) throw new Error('Der Puffer ist noch leer – es läuft noch keine Aufnahme.');
+    const we = timeline.bufferEnd(vsegs);
+    const ws = Math.max(we - seconds * 1000, Math.min(...vsegs.map((x) => x.startedAt)));
+    const v = timeline.planWindow(vsegs, ws, we);
+    const a = timeline.planWindow(segList(), ws, we);
+    if (!v.parts.length) throw new Error('Der Puffer ist noch leer.');
+    for (const p of [...v.parts, ...a.parts]) { pinned.add(p.file); pin.push(p.file); }
     await fs.promises.mkdir(s.clipsDir, { recursive: true });
     const game = state.game ? ` ${state.game.replace(/\.exe$/i, '')}` : '';
     const out = uniquePath(s.clipsDir, `Clip ${stamp()}${game}`);
-    send('export:progress', { id, label: 'Clip wird erstellt …', progress: 0 });
-    await exporter.exportClip(ffmpeg, parts, out, exportOpts((p) => send('export:progress', { id, label: 'Clip wird erstellt …', progress: p })));
+    const label = 'Clip wird erstellt …';
+    send('export:progress', { id, label, progress: 0 });
+    const duration = await exporter.exportClip(ffmpeg, { ws, we, video: v, audio: a.parts.length ? a : null }, out,
+      exportOpts((p) => send('export:progress', { id, label, progress: p })));
     send('export:progress', { id, done: true });
     ensureThumb(out).then(() => send('clips:changed')).catch(() => {});
     const info = { file: out, name: path.basename(out), duration };
@@ -288,7 +339,7 @@ function showWindow(page) {
 
 function updateTray() {
   if (!tray) return;
-  const rec = state.rendererActive;
+  const rec = state.videoActive;
   tray.setToolTip(rec ? `Clipper – nimmt auf${state.game ? ` (${state.game})` : ''}` : 'Clipper – Aufnahme pausiert');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Clipper öffnen', click: () => showWindow() },
@@ -335,7 +386,7 @@ function setupIpc() {
     if ('encoder' in patch) encoder = next.encoder === 'cpu' ? 'libx264' : (hwEncoder || 'libx264');
     if ('clipsDir' in patch) send('clips:changed');
     if ('mode' in patch && patch.mode !== before.mode) { state.override = null; await pollGame(); }
-    if (['mode', 'fps', 'resolution', 'bitrateMbps', 'systemAudio', 'micAudio', 'micDeviceId', 'screenId', 'bufferMinutes']
+    if (['mode', 'fps', 'resolution', 'bitrateMbps', 'systemAudio', 'micAudio', 'micDeviceId', 'screenId', 'bufferMinutes', 'encoder']
       .some((k) => k in patch)) applyRecording();
     else broadcastState();
     return next;
@@ -403,8 +454,7 @@ function setupIpc() {
   ipcMain.handle('segment:save', (_e, meta, buf) => saveSegment(meta, buf));
   ipcMain.on('recorder:status', (_e, st) => {
     state.rendererActive = !!st.active;
-    state.error = st.error || null;
-    if (st.error) toast(`Aufnahme-Fehler: ${st.error}`, 'error');
+    if (st.error) toast(`Ton-Aufnahme nicht möglich: ${st.error}`, 'error'); // Video läuft trotzdem weiter
     broadcastState();
   });
   ipcMain.on('renderer:ready', () => { applyRecording(); });
@@ -430,6 +480,7 @@ app.on('second-instance', () => showWindow());
 app.on('before-quit', () => { quitting = true; });
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  try { if (video && video.proc) video.proc.kill(); } catch { /* egal */ }
   try { fs.rmSync(bufferDir, { recursive: true, force: true }); } catch { /* egal */ }
 });
 app.on('window-all-closed', () => { /* im Tray weiterlaufen */ });
@@ -439,6 +490,9 @@ app.whenReady().then(async () => {
   bufferDir = path.join(app.getPath('userData'), 'buffer');
   fs.rmSync(bufferDir, { recursive: true, force: true });
   fs.mkdirSync(bufferDir, { recursive: true });
+  video = new VideoCapture(ffmpeg, bufferDir);
+  video.on('crashed', (msg) => { state.videoActive = false; state.error = msg; toast(msg, 'error'); broadcastState(); });
+  video.on('stopped', () => { state.videoActive = video.running; broadcastState(); });
   settingsStore.get();
   setupIpc();
   setupCapture();
@@ -458,5 +512,6 @@ app.whenReady().then(async () => {
     hwEncoder = enc === 'libx264' ? null : enc;
     encoder = cfg().encoder === 'cpu' ? 'libx264' : enc;
     broadcastState();
-  }).catch(() => {});
+    return video.probe(hwEncoder);
+  }).then(() => { broadcastState(); }).catch(() => {});
 });

@@ -17,17 +17,12 @@ test('überlappende Segmente werden zurechtgeschnitten', () => {
   assert.strictEqual(T.bufferedSeconds(s), 24);
 });
 
-test('planClip: letzte 12s', () => {
+test('planWindow: letzte 12s', () => {
   const s = [seg(1, 0, 10500), seg(2, 10000, 10500), seg(3, 20000, 4000)];
-  const { parts, duration } = T.planClip(s, 12);
+  const { parts, firstFrom } = T.planWindow(s, 12000, 24000);
   assert.strictEqual(parts.length, 2);
-  assert.ok(Math.abs(parts[0].inpoint - 2) < 1e-9);
-  assert.ok(Math.abs(duration - 12) < 1e-6);
-});
-
-test('planClip: mehr gewünscht als vorhanden', () => {
-  const { duration } = T.planClip([seg(1, 0, 5000)], 600);
-  assert.ok(Math.abs(duration - 5) < 1e-6);
+  assert.strictEqual(firstFrom, 10000);
+  assert.ok(Math.abs(parts[1].outpoint - 4) < 1e-9);
 });
 
 test('expiredSegments', () => {
@@ -36,29 +31,40 @@ test('expiredSegments', () => {
   assert.deepStrictEqual(ex.map((x) => x.id), [1, 2]);
 });
 
-test('End-to-End: WebM-Segmente → MP4', async () => {
+test('End-to-End: TS-Video + WebM-Ton → MP4 (Ton wanduhr-synchron)', async () => {
   const ff = E.resolveFfmpeg();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clipper-t-'));
-  const files = [];
-  for (let i = 0; i < 3; i++) {
-    const f = path.join(dir, `s${i}.webm`);
-    const r = spawnSync(ff, ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=640x360:rate=30`,
-      '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '4.5', '-c:v', 'libvpx', '-c:a', 'libopus', f]);
-    assert.strictEqual(r.status, 0, String(r.stderr));
-    files.push(f);
-  }
-  const segs = files.map((f, i) => ({ id: i, file: f, startedAt: i * 4000, endedAt: i * 4000 + 4500 }));
-  const { parts, duration } = T.planClip(segs, 9);
+  const mk = (args) => { const r = spawnSync(ff, ['-y', '-loglevel', 'error', ...args]); assert.strictEqual(r.status, 0, String(r.stderr)); };
+  const base = 1_000_000;
+  // Video: 3 Segmente à 4 s ab t=base (Ende = base+12000)
+  const vsegs = [0, 1, 2].map((i) => {
+    const f = path.join(dir, `v${i}.ts`);
+    mk(['-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=30', '-t', '4', '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '30', '-f', 'mpegts', f]);
+    return { id: i, file: f, startedAt: base + i * 4000, endedAt: base + (i + 1) * 4000 };
+  });
+  // Ton: Segmente starten 1 s nach Videobeginn, überlappen um 0.5 s
+  const asegs = [0, 1].map((i) => {
+    const f = path.join(dir, `a${i}.webm`);
+    mk(['-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '6.5', '-c:a', 'libopus', f]);
+    return { id: i, file: f, startedAt: base + 1000 + i * 6000, endedAt: base + 1000 + i * 6000 + 6500 };
+  });
+  const we = base + 12000, ws = we - 9000;
+  const v = T.planWindow(vsegs, ws, we);
+  const a = T.planWindow(asegs, ws, we);
   const out = path.join(dir, 'out.mp4');
   let last = 0;
-  await E.exportClip(ff, parts, out, { fps: 30, bitrateMbps: 4, encoder: 'libx264', onProgress: (p) => { last = p; } });
-  assert.ok(fs.statSync(out).size > 10000);
+  const dur = await E.exportClip(ff, { ws, we, video: v, audio: a }, out, { fps: 30, bitrateMbps: 4, encoder: 'libx264', onProgress: (p) => { last = p; } });
+  assert.ok(Math.abs(dur - 9) < 0.01);
   const probe = spawnSync(ff, ['-i', out, '-f', 'null', '-'], { encoding: 'utf8' });
   const m = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe.stderr);
-  const dur = +m[1] * 3600 + +m[2] * 60 + +m[3];
-  assert.ok(Math.abs(dur - duration) < 0.5, `Dauer ${dur} vs ${duration}`);
+  const real = +m[1] * 3600 + +m[2] * 60 + +m[3];
+  assert.ok(Math.abs(real - 9) < 0.3, `Dauer ${real}`);
   assert.ok(/Audio: aac/.test(probe.stderr) && /Video: h264/.test(probe.stderr));
   assert.ok(last > 0.9, 'Fortschritt gemeldet');
+  // Ohne Ton
+  const out3 = path.join(dir, 'silent.mp4');
+  await E.exportClip(ff, { ws, we, video: v, audio: null }, out3, { fps: 30, bitrateMbps: 4, encoder: 'libx264' });
+  assert.ok(!/Audio:/.test(spawnSync(ff, ['-i', out3], { encoding: 'utf8' }).stderr));
   // Trim + Thumbnail
   const out2 = path.join(dir, 'trim.mp4');
   await E.trimClip(ff, out, out2, 1, 4, { fps: 30, bitrateMbps: 4, encoder: 'libx264' });

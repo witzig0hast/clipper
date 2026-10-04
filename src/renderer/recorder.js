@@ -1,8 +1,7 @@
 'use strict';
 /**
- * Dauer-Aufnahme im Renderer: Bildschirm (+System-Audio/Mikro) wird in kurzen,
- * leicht überlappenden WebM-Segmenten an den Hauptprozess übergeben, der daraus
- * den Ringpuffer baut.
+ * Ton-Aufnahme im Renderer: System-Audio/Mikrofon wird in kurzen, leicht überlappenden
+ * WebM-Segmenten an den Hauptprozess übergeben (das Bild nimmt ffmpeg auf).
  */
 const Recorder = (() => {
   const SEG_MS = 10000;      // Länge eines Segments
@@ -21,59 +20,43 @@ const Recorder = (() => {
   const active = new Map();
   let queue = Promise.resolve();
 
-  const pickMime = () => [
-    'video/webm;codecs=h264,opus', 'video/webm;codecs=vp9,opus',
-    'video/webm;codecs=vp8,opus', 'video/webm',
-  ].find((t) => MediaRecorder.isTypeSupported(t));
+  const pickMime = () => ['audio/webm;codecs=opus', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported(t));
 
-  function videoConstraints(c) {
-    const v = { frameRate: { ideal: c.fps, max: c.fps } };
-    if (c.resolution !== 'native') {
-      const h = Number(c.resolution);
-      v.height = { max: h };
-      v.width = { max: Math.round((h * 16) / 9) };
-    }
-    return v;
-  }
-
-  async function captureStream(c) {
-    try {
-      // Hauptprozess liefert Bildschirm + Loopback-Audio (setDisplayMediaRequestHandler)
-      return await navigator.mediaDevices.getDisplayMedia({ video: videoConstraints(c), audio: c.systemAudio });
-    } catch (e1) {
-      // Fallback: klassische desktop-Capture-Constraints
-      const screens = await window.api.listScreens();
-      const src = screens.find((s) => s.id === c.screenId) || screens.find((s) => s.primary) || screens[0];
-      if (!src) throw e1;
-      const v = { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: src.id, maxFrameRate: c.fps } };
-      if (c.resolution !== 'native') {
-        v.mandatory.maxHeight = Number(c.resolution);
-        v.mandatory.maxWidth = Math.round((Number(c.resolution) * 16) / 9);
-      }
-      return navigator.mediaDevices.getUserMedia({
-        video: v,
-        audio: c.systemAudio ? { mandatory: { chromeMediaSource: 'desktop' } } : false,
-      });
-    }
-  }
-
+  // Bild kommt aus ffmpeg (Hardware-Encoder). Hier wird nur der Ton aufgenommen:
+  // System-Audio (Loopback) und/oder Mikrofon.
   async function buildRecordStream(c) {
-    const video = stream.getVideoTracks()[0];
-    const sysAudio = stream.getAudioTracks();
-    if (!c.micAudio) return new MediaStream([video, ...sysAudio]);
+    const tracks = [];
+    if (c.systemAudio) {
+      let s;
+      try {
+        s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      } catch {
+        s = await navigator.mediaDevices.getUserMedia({
+          video: { mandatory: { chromeMediaSource: 'desktop' } },
+          audio: { mandatory: { chromeMediaSource: 'desktop' } },
+        });
+      }
+      s.getVideoTracks().forEach((t) => t.stop()); // Bildaufnahme sofort beenden – spart GPU
+      stream = s;
+      tracks.push(...s.getAudioTracks());
+    }
     let mic = null;
-    try {
-      mic = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: c.micDeviceId ? { exact: c.micDeviceId } : undefined, echoCancellation: false, noiseSuppression: true },
-      });
-      extra.push(mic);
-    } catch { /* Mikro nicht verfügbar -> ohne */ }
-    if (!mic && sysAudio.length) return new MediaStream([video, ...sysAudio]);
+    if (c.micAudio) {
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: c.micDeviceId ? { exact: c.micDeviceId } : undefined, echoCancellation: false, noiseSuppression: true },
+        });
+        extra.push(mic);
+      } catch { /* Mikro nicht verfügbar */ }
+    }
+    if (!tracks.length && !mic) throw new Error('Keine Audioquelle verfügbar.');
+    if (tracks.length && !mic) return new MediaStream(tracks);
+    if (!tracks.length) return mic;
     audioCtx = new AudioContext({ sampleRate: 48000 });
     const dest = audioCtx.createMediaStreamDestination();
-    if (sysAudio.length) audioCtx.createMediaStreamSource(new MediaStream(sysAudio)).connect(dest);
-    if (mic) audioCtx.createMediaStreamSource(mic).connect(dest);
-    return new MediaStream([video, ...dest.stream.getAudioTracks()]);
+    audioCtx.createMediaStreamSource(new MediaStream(tracks)).connect(dest);
+    audioCtx.createMediaStreamSource(mic).connect(dest);
+    return dest.stream;
   }
 
   async function sendSegment(seg, partial) {
@@ -89,11 +72,7 @@ const Recorder = (() => {
     let resolveDone;
     seg.done = new Promise((r) => { resolveDone = r; });
     try {
-      seg.rec = new MediaRecorder(recordStream, {
-        mimeType: mime,
-        videoBitsPerSecond: Math.round(cfg.bitrateMbps * 1e6),
-        audioBitsPerSecond: 160000,
-      });
+      seg.rec = new MediaRecorder(recordStream, { mimeType: mime, audioBitsPerSecond: 160000 });
     } catch (e) { fail(e); return; }
     seg.rec.ondataavailable = (e) => { if (e.data && e.data.size) seg.chunks.push(e.data); };
     seg.rec.onerror = (e) => fail(e.error || e);
@@ -119,17 +98,16 @@ const Recorder = (() => {
     if (running && key === cfgKey) return;
     await doStop();
     cfg = config; cfgKey = key;
+    if (!config.systemAudio && !config.micAudio) return; // stumm aufnehmen
     mime = pickMime();
-    if (!mime) { window.api.reportRecorder({ active: false, error: 'Kein unterstütztes Video-Format verfügbar.' }); return; }
+    if (!mime) { window.api.reportRecorder({ active: false, error: 'Kein unterstütztes Audio-Format verfügbar.' }); return; }
     try {
-      stream = await captureStream(config);
       recordStream = await buildRecordStream(config);
     } catch (e) {
       await doStop();
       window.api.reportRecorder({ active: false, error: e.message || String(e) });
       return;
     }
-    stream.getVideoTracks()[0].addEventListener('ended', () => fail(new Error('Bildschirmaufnahme wurde beendet.')));
     running = true;
     startSegment();
     timer = setInterval(startSegment, SEG_MS);
