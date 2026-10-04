@@ -1,0 +1,23 @@
+name: ffmpeg-Probe (Windows)
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - shell: pwsh
+        continue-on-error: true
+        run: |
+          $ff = node -e "console.log(require('ffmpeg-static'))"
+          & $ff -hide_banner -version | Select-Object -First 3
+          "--- filters"; & $ff -hide_banner -filters 2>&1 | Select-String "ddagrab|hwdownload|scale_d3d11|hwmap"
+          "--- encoders"; & $ff -hide_banner -encoders 2>&1 | Select-String "h264_|libx264"
+          "--- devices"; & $ff -hide_banner -devices 2>&1 | Select-String "gdigrab|dshow"
+          "--- ddagrab + libx264 (3s)"
+          & $ff -hide_banner -loglevel info -y -f lavfi -i "ddagrab=framerate=30" -t 3 -vf "hwdownload,format=bgra,format=yuv420p" -c:v libx264 -preset ultrafast ddagrab.mp4 2>&1 | Select-Object -Last 15
+          "--- gdigrab + libx264 (3s)"
+          & $ff -hide_banner -loglevel info -y -f gdigrab -framerate 30 -i desktop -t 3 -c:v libx264 -preset ultrafast gdi.mp4 2>&1 | Select-Object -Last 8
+          Get-ChildItem *.mp4 | Select-Object Name, Length
