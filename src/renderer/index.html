@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4v16M16 4v16M3 9h5M3 15h5M16 9h5M16 15h5" stroke="currentColor" stroke-width="1.8" fill="none"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6.5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="17.5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 8l12 9M8 16L20 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 1.8h6A2 2 0 0 0 17 19l1-12M9 7V4.5h6V7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L5 13.5h6L10 22l9-12h-6.2z" fill="currentColor"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v5l3.5 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<div class="drag"></div>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <img src="../../assets/icon.png" alt="" width="34" height="34">
+      <div><b>Clipper</b><span>Instant Replay</span></div>
+    </div>
+    <nav>
+      <button class="nav active" data-page="home"><svg><use href="#i-home"/></svg>Übersicht</button>
+      <button class="nav" data-page="clips"><svg><use href="#i-film"/></svg>Clips<em id="clipCount"></em></button>
+      <button class="nav" data-page="settings"><svg><use href="#i-gear"/></svg>Einstellungen</button>
+    </nav>
+    <div class="side-foot">
+      <div class="pill" id="sidePill"><i></i><span>–</span></div>
+    </div>
+  </aside>
+
+  <main>
+    <!-- ÜBERSICHT -->
+    <section class="page active" id="page-home">
+      <header class="page-head"><h1>Übersicht</h1><p>Clipper nimmt im Hintergrund auf – drück den Hotkey, wenn etwas Geiles passiert.</p></header>
+
+      <div class="hero card" id="hero">
+        <div class="rec-orb"><span></span></div>
+        <div class="hero-text">
+          <h2 id="heroTitle">–</h2>
+          <p id="heroSub">–</p>
+        </div>
+        <button class="btn ghost" id="toggleRec"><svg><use href="#i-pause"/></svg><span>Pausieren</span></button>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-title"><svg><use href="#i-clock"/></svg>Replay-Puffer</div>
+          <div class="big"><span id="bufNow">0:00</span><small> / <span id="bufMax">20:00</span></small></div>
+          <div class="meter"><div id="meterFill"></div></div>
+          <div class="chips">
+            <span class="chip" id="bufSize">0 MB</span>
+            <span class="chip" id="encChip">Encoder …</span>
+          </div>
+        </div>
+
+        <div class="card clipcard">
+          <div class="card-title"><svg><use href="#i-bolt"/></svg>Clip erstellen</div>
+          <div class="clip-len"><span id="clipLenLabel">0:30</span><small>der letzten Aufnahme</small></div>
+          <input type="range" id="clipLen" min="5" max="1200" step="1" value="30">
+          <div class="quick" id="quick">
+            <button data-s="15">15 s</button><button data-s="30">30 s</button><button data-s="60">1 min</button>
+            <button data-s="120">2 min</button><button data-s="300">5 min</button><button data-s="99999">Alles</button>
+          </div>
+          <button class="btn primary big-btn" id="makeClip"><svg><use href="#i-scissors"/></svg><span>Clip speichern</span><kbd id="hotkeyHint">Alt+F10</kbd></button>
+        </div>
+      </div>
+
+      <div class="section-head"><h3>Neueste Clips</h3><button class="link" data-page="clips">Alle anzeigen →</button></div>
+      <div class="strip" id="recentStrip"></div>
+    </section>
+
+    <!-- CLIPS -->
+    <section class="page" id="page-clips">
+      <header class="page-head row">
+        <div><h1>Clips</h1><p id="clipsSub">Deine gespeicherten Momente.</p></div>
+        <button class="btn ghost" id="openFolder"><svg><use href="#i-folder"/></svg><span>Ordner öffnen</span></button>
+      </header>
+      <div class="clip-grid" id="clipGrid"></div>
+      <div class="empty" id="clipsEmpty" hidden>
+        <svg><use href="#i-film"/></svg>
+        <h3>Noch keine Clips</h3>
+        <p>Drück im Spiel deinen Hotkey – der Clip landet automatisch hier.</p>
+      </div>
+    </section>
+
+    <!-- EINSTELLUNGEN -->
+    <section class="page" id="page-settings">
+      <header class="page-head"><h1>Einstellungen</h1><p>Änderungen werden sofort gespeichert.</p></header>
+
+      <div class="card set">
+        <h3>Aufnahme</h3>
+        <div class="row-set"><div><b>Wann aufnehmen?</b><span>Automatisch startet die Aufnahme, sobald ein Spiel aus deiner Liste läuft.</span></div>
+          <div class="seg" id="s-mode"><button data-v="auto">Bei Spielen</button><button data-v="always">Immer</button><button data-v="manual">Manuell</button></div></div>
+        <div class="row-set"><div><b>Puffer-Länge</b><span>So viel Rückblick hast du jederzeit.</span></div>
+          <div class="slider-wrap"><input type="range" id="s-bufferMinutes" min="1" max="30" step="1"><output id="o-buffer"></output></div></div>
+        <div class="row-set"><div><b>Bildschirm</b><span>Welcher Monitor aufgenommen wird.</span></div><select id="s-screenId"></select></div>
+        <div class="row-set"><div><b>Auflösung</b><span>Niedriger = weniger Last und kleinere Dateien.</span></div>
+          <select id="s-resolution"><option value="native">Original</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option></select></div>
+        <div class="row-set"><div><b>Bildrate</b><span></span></div>
+          <div class="seg" id="s-fps"><button data-v="30">30 FPS</button><button data-v="60">60 FPS</button></div></div>
+        <div class="row-set"><div><b>Qualität (Bitrate)</b><span id="diskHint">–</span></div>
+          <div class="slider-wrap"><input type="range" id="s-bitrateMbps" min="4" max="40" step="1"><output id="o-bitrate"></output></div></div>
+        <div class="row-set"><div><b>Export-Encoder</b><span id="encHint">Grafikkarte wird beim Export genutzt, wenn möglich.</span></div>
+          <select id="s-encoder"><option value="auto">Automatisch (Grafikkarte)</option><option value="cpu">Prozessor (x264)</option></select></div>
+      </div>
+
+      <div class="card set">
+        <h3>Audio</h3>
+        <div class="row-set"><div><b>Spiel- &amp; Systemton</b><span>Alles, was du über deine Lautsprecher/Kopfhörer hörst.</span></div><label class="switch"><input type="checkbox" id="s-systemAudio"><i></i></label></div>
+        <div class="row-set"><div><b>Mikrofon</b><span>Deine Stimme (z. B. Discord-Kommentare) mit aufnehmen.</span></div><label class="switch"><input type="checkbox" id="s-micAudio"><i></i></label></div>
+        <div class="row-set" id="micRow"><div><b>Mikrofon-Gerät</b><span></span></div><select id="s-micDeviceId"></select></div>
+      </div>
+
+      <div class="card set">
+        <h3>Hotkey</h3>
+        <div class="row-set"><div><b>Clip speichern</b><span>Funktioniert auch im Spiel. Klicken, dann Tastenkombination drücken.</span></div>
+          <button class="btn ghost keycap" id="s-hotkey"></button></div>
+        <div class="row-set"><div><b>Standard-Länge für Hotkey</b><span>So viele Sekunden zurück werden gespeichert.</span></div>
+          <select id="s-hotkeySeconds"><option value="10">10 Sekunden</option><option value="15">15 Sekunden</option><option value="30">30 Sekunden</option><option value="45">45 Sekunden</option><option value="60">1 Minute</option><option value="120">2 Minuten</option><option value="300">5 Minuten</option></select></div>
+        <div class="row-set"><div><b>Ton beim Speichern</b><span>Kurzer Piepton als Bestätigung im Spiel.</span></div><label class="switch"><input type="checkbox" id="s-beep"><i></i></label></div>
+        <div class="row-set"><div><b>Windows-Benachrichtigung</b><span></span></div><label class="switch"><input type="checkbox" id="s-notify"><i></i></label></div>
+      </div>
+
+      <div class="card set">
+        <h3>Spiele</h3>
+        <p class="hint">Im Modus „Bei Spielen“ läuft die Aufnahme, sobald einer dieser Prozesse aktiv ist.</p>
+        <div class="add-game">
+          <input id="gameInput" list="procList" placeholder="z. B. mygame.exe  –  oder aus laufenden Programmen wählen" autocomplete="off">
+          <datalist id="procList"></datalist>
+          <button class="btn primary" id="addGame">Hinzufügen</button>
+        </div>
+        <div class="tags" id="gameTags"></div>
+        <button class="link" id="resetGames">Standardliste wiederherstellen</button>
+      </div>
+
+      <div class="card set">
+        <h3>Speicherort &amp; System</h3>
+        <div class="row-set"><div><b>Clip-Ordner</b><span id="dirLabel"></span></div><button class="btn ghost" id="pickDir">Ändern …</button></div>
+        <div class="row-set"><div><b>Mit Windows starten</b><span>Clipper startet im Hintergrund (Tray), damit du nie etwas verpasst.</span></div><label class="switch"><input type="checkbox" id="s-openAtLogin"><i></i></label></div>
+        <div class="row-set"><div><b>Minimiert starten</b><span>Fenster bleibt zu, bis du es im Tray öffnest.</span></div><label class="switch"><input type="checkbox" id="s-startHidden"><i></i></label></div>
+      </div>
+      <p class="foot-note">Tipp: Für Spiele im „Vollbild (exklusiv)“ gibt es manchmal ein schwarzes Bild – stell das Spiel auf „Rahmenloses Fenster“ / „Vollbild-Fenster“.</p>
+    </section>
+  </main>
+</div>
+
+<!-- Editor -->
+<div class="modal" id="editor" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h3 id="edTitle">Clip</h3><button class="icon-btn" id="edClose"><svg><use href="#i-x"/></svg></button></div>
+    <video id="edVideo" controls></video>
+    <div class="trim">
+      <div class="trim-track" id="trimTrack">
+        <div class="trim-range" id="trimRange"></div>
+        <div class="trim-head" id="trimPlay"></div>
+        <div class="trim-handle" id="hStart"></div>
+        <div class="trim-handle" id="hEnd"></div>
+      </div>
+      <div class="trim-info">
+        <span>Start <b id="tStart">0:00.0</b></span>
+        <span>Länge <b id="tLen">0:00.0</b></span>
+        <span>Ende <b id="tEnd">0:00.0</b></span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="edPreview"><svg><use href="#i-play"/></svg><span>Auswahl abspielen</span></button>
+      <span class="spacer"></span>
+      <button class="btn primary" id="edSave"><svg><use href="#i-scissors"/></svg><span>Als neuen Clip speichern</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- Dialog -->
+<div class="modal" id="dialog" hidden>
+  <div class="modal-card small">
+    <h3 id="dlgTitle"></h3>
+    <p id="dlgText"></p>
+    <input id="dlgInput" hidden>
+    <div class="modal-actions"><span class="spacer"></span><button class="btn ghost" id="dlgCancel">Abbrechen</button><button class="btn primary" id="dlgOk">OK</button></div>
+  </div>
+</div>
+
+<div class="docks">
+  <div id="progressDock"></div>
+  <div id="toasts"></div>
+</div>
+
+<script src="recorder.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
