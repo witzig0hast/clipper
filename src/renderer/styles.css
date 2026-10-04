@@ -45,7 +45,7 @@ nav { display: flex; flex-direction: column; gap: 4px; }
 .side-foot { margin-top: auto; }
 .pill { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); font-size: 13px; color: var(--muted); }
 .pill i { width: 9px; height: 9px; border-radius: 50%; background: #5b6379; flex: none; }
-.pill.on { color: var(--text); } .pill.on i { background: var(--rec); box-shadow: 0 0 0 0 rgba(255,77,109,.7); animation: pulse 1.6s infinite; }
+.pill.on { color: var(--text); } .pill.on i { background: var(--rec); }
 .pill.wait i { background: var(--warn); }
 @keyframes pulse { 70% { box-shadow: 0 0 0 9px rgba(255,77,109,0); } 100% { box-shadow: 0 0 0 0 rgba(255,77,109,0); } }
 
@@ -74,7 +74,7 @@ h3 { font-size: 15px; }
 .hero.err { --glow: rgba(255,77,109,.3); border-color: rgba(255,77,109,.5); }
 .rec-orb { width: 54px; height: 54px; border-radius: 50%; background: var(--card2); display: grid; place-items: center; flex: none; z-index: 1; }
 .rec-orb span { width: 20px; height: 20px; border-radius: 50%; background: #5b6379; transition: .3s; }
-.hero.on .rec-orb span { background: var(--rec); animation: pulse 1.6s infinite; }
+.hero.on .rec-orb span { background: var(--rec); }
 .hero.wait .rec-orb span { background: var(--warn); }
 .hero-text { flex: 1; z-index: 1; min-width: 0; }
 .hero-text h2 { font-size: 20px; }
@@ -85,7 +85,7 @@ h3 { font-size: 15px; }
 .big { font-size: 40px; font-weight: 700; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
 .big small { font-size: 18px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
 .meter { height: 10px; border-radius: 99px; background: var(--card2); margin: 14px 0; overflow: hidden; }
-.meter div { height: 100%; width: 0; background: var(--grad); border-radius: 99px; transition: width .8s ease; }
+.meter div { height: 100%; width: 0; background: var(--grad); border-radius: 99px;  }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip { background: var(--card2); border: 1px solid var(--line); border-radius: 99px; padding: 3px 11px; font-size: 12px; color: var(--muted); }
 
@@ -124,7 +124,7 @@ kbd { font: 600 11.5px var(--font); background: rgba(0,0,0,.28); border: 1px sol
 .clip { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; transition: .2s; }
 .clip:hover { border-color: rgba(124,58,237,.6); transform: translateY(-2px); box-shadow: 0 12px 30px rgba(0,0,0,.35); }
 .thumb { position: relative; aspect-ratio: 16/9; background: #0a0c12 center/cover; cursor: pointer; display: grid; place-items: center; }
-.thumb .play { width: 46px; height: 46px; border-radius: 50%; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); display: grid; place-items: center; opacity: 0; transform: scale(.85); transition: .2s; }
+.thumb .play { width: 46px; height: 46px; border-radius: 50%; background: rgba(0,0,0,.55); display: grid; place-items: center; opacity: 0; transform: scale(.85); transition: .2s; }
 .thumb .play svg { width: 22px; height: 22px; }
 .clip:hover .play { opacity: 1; transform: none; }
 .badge { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.7); border-radius: 6px; padding: 1px 7px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -162,7 +162,7 @@ select option { background: #1a1f2e; }
 .switch input:checked + i { background: var(--grad); }
 .switch input:checked + i::after { transform: translateX(20px); }
 .keycap { min-width: 150px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: .5px; }
-.keycap.listening { border-color: var(--accent); color: var(--accent2); animation: blink 1s infinite; }
+.keycap.listening { border-color: var(--accent); color: var(--accent2); }
 @keyframes blink { 50% { opacity: .55; } }
 .hint { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
 .add-game { display: flex; gap: 10px; margin-bottom: 14px; }
@@ -176,7 +176,7 @@ select option { background: #1a1f2e; }
 .foot-note { color: var(--muted); font-size: 12.5px; padding: 4px 6px 30px; }
 
 /* Modals */
-.modal { position: fixed; inset: 0; background: rgba(5,6,10,.72); backdrop-filter: blur(8px); display: grid; place-items: center; z-index: 20; animation: in .2s; }
+.modal { position: fixed; inset: 0; background: rgba(5,6,10,.72); display: grid; place-items: center; z-index: 20; animation: in .2s; }
 .modal-card { width: min(920px, 92vw); background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px 20px; box-shadow: 0 30px 80px rgba(0,0,0,.6); max-height: 94vh; overflow: auto; }
 .modal-card.small { width: 420px; }
 .modal-card.small p { color: var(--muted); margin: 8px 0 14px; }
@@ -203,3 +203,5 @@ select option { background: #1a1f2e; }
 .prog { width: 300px; } .prog div.bar { height: 6px; background: var(--card2); border-radius: 99px; margin-top: 8px; overflow: hidden; }
 .prog div.bar i { display: block; height: 100%; background: var(--grad); width: 0; transition: width .25s; }
 #toasts, #progressDock { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+
+.diag { font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; white-space: pre-wrap; word-break: break-all; user-select: text; max-height: 220px; overflow: auto; margin-bottom: 12px; }

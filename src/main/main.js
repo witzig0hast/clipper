@@ -18,6 +18,8 @@ const { VideoCapture } = require('./capture');
 const APP_ID = 'de.hastnetwork.clipper';
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 
+// Die Oberfläche braucht keine GPU – so konkurriert Clipper nie mit dem Spiel um die Grafikkarte.
+app.disableHardwareAcceleration();
 app.setAppUserModelId(APP_ID);
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
@@ -82,6 +84,7 @@ function publicState() {
     encoder,
     hwEncoder,
     capture: video.combo,
+    diag: { combos: video.combos, stats: video.stats, cmd: video.cmd, ffmpegLog: video.lastError, hw: hwEncoder, platform: process.platform },
     audioActive: state.rendererActive,
     error: state.error,
     exports: state.exports,
@@ -503,8 +506,8 @@ app.whenReady().then(async () => {
   registerHotkey();
   applyStartup();
 
-  setInterval(() => pollGame().catch(() => {}), 4000);
-  setInterval(() => { if (win && win.isVisible()) broadcastState(); }, 1000);
+  setInterval(() => pollGame().catch(() => {}), 8000);
+  setInterval(() => { if (win && win.isVisible() && !win.isMinimized()) broadcastState(); }, 1000);
   pollGame().catch(() => {});
 
   // Grafikkarten-Encoder im Hintergrund testen

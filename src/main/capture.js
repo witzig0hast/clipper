@@ -33,7 +33,7 @@ function codecArgs(enc, c) {
     case 'h264_amf': return ['-c:v', 'h264_amf', '-quality', 'speed', '-rc', 'vbr_peak', '-b:v', br, '-maxrate', br, ...g];
     case 'h264_qsv': return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', br, '-maxrate', br, ...g];
     default: return ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '23', '-maxrate', br,
-      '-bufsize', `${Math.round(c.bitrateMbps * 2000)}k`, '-sc_threshold', '0', ...g];
+      '-bufsize', `${Math.round(c.bitrateMbps * 2000)}k`, '-sc_threshold', '0', '-threads', '2', ...g];
   }
 }
 
@@ -59,7 +59,7 @@ class VideoCapture extends EventEmitter {
     super();
     this.ffmpeg = ffmpeg; this.dir = dir;
     this.proc = null; this.t0 = null; this.running = false; this.stopping = false;
-    this.combos = []; this.combo = null; this.lastError = '';
+    this.combos = []; this.combo = null; this.lastError = ''; this.stats = ''; this.cmd = '';
     this.ready = new Promise((r) => { this.markReady = r; }); // wird nach probe() erfüllt
   }
 
@@ -101,10 +101,17 @@ class VideoCapture extends EventEmitter {
       '-f', 'segment', '-segment_time', String(SEG), '-segment_format', 'mpegts',
       '-reset_timestamps', '1', '-flush_packets', '1', '-muxdelay', '0', '-muxpreload', '0', path.join(this.dir, 'v-%05d.ts'),
     ]);
+    this.cmd = `ffmpeg ${args.join(' ')}`;
     const proc = spawn(this.ffmpeg, args, { windowsHide: true });
     this.proc = proc; this.running = true;
     try { os.setPriority(proc.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* egal */ }
-    proc.stderr.on('data', (d) => { this.lastError = (this.lastError + d.toString()).slice(-1500); });
+    proc.stderr.on('data', (d) => {
+      const txt = d.toString();
+      const lines = txt.split(/[\r\n]+/).filter(Boolean);
+      const st = lines.filter((l) => /^frame=/.test(l)).pop();
+      if (st) this.stats = st.trim();
+      this.lastError = (this.lastError + lines.filter((l) => !/^frame=/.test(l)).join('\n')).slice(-1500);
+    });
     proc.stdin.on('error', () => {});
     proc.on('close', (code) => {
       this.running = false; this.proc = null; clearInterval(this.watch);

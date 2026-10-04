@@ -7,7 +7,7 @@ const { DEFAULT_GAMES } = require('./games');
 const defaults = () => ({
   mode: 'auto',            // auto = nur bei erkannten Spielen | always | manual
   bufferMinutes: 20,
-  fps: 60,
+  fps: 30,
   resolution: 'native',    // native | 1440 | 1080 | 720
   bitrateMbps: 12,
   systemAudio: true,

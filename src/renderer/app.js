@@ -124,6 +124,7 @@ function renderState() {
     ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte für Aufnahme und Export – kaum FPS-Verlust.`
     : 'Keine Hardware-Encoder gefunden – der Prozessor wird genutzt (kann FPS kosten).';
 
+  renderDiag(s);
   const max = Math.max(5, Math.floor(s.bufferSeconds));
   const slider = $('#clipLen');
   slider.max = Math.max(max, 6);
@@ -134,6 +135,19 @@ function renderState() {
   $('#makeClip').disabled = s.bufferSeconds < 3;
 }
 
+function diagText(s) {
+  const d = s.diag || {};
+  return [
+    `Plattform: ${d.platform} | Hardware-Encoder: ${d.hw || 'keiner'} | Export: ${s.encoder}`,
+    `Funktionierende Aufnahme-Methoden: ${(d.combos || []).map((c) => `${c.src}+${c.enc}`).join(', ') || 'keine'}`,
+    `Aktiv: ${s.capture ? `${s.capture.src}+${s.capture.enc}` : '–'} | läuft: ${s.recording} | Audio: ${s.audioActive}`,
+    `ffmpeg: ${d.stats || '–'}`,
+    `Befehl: ${d.cmd || '–'}`,
+    d.ffmpegLog ? `Log: ${d.ffmpegLog}` : '',
+  ].filter(Boolean).join('\n');
+}
+function renderDiag(s) { if ($('#page-settings').classList.contains('active')) $('#diagBox').textContent = diagText(s); }
+$('#diagCopy').onclick = () => { navigator.clipboard.writeText(diagText(state)); toast('Diagnose kopiert', 'success'); };
 $('#toggleRec').onclick = async () => { state = await api.toggleRecording(); renderState(); };
 $('#clipLen').oninput = (e) => { clipWish = clipSeconds = Number(e.target.value); $('#clipLenLabel').textContent = fmtTime(clipSeconds); setRange(e.target); };
 $('#quick').onclick = (e) => {
