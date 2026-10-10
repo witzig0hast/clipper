@@ -1,0 +1,19 @@
+name: OBS-Integrationstest (Windows)
+on:
+  push:
+    paths: ['src/main/obs*.js', 'src/main/segmenter.js', 'src/main/exporter.js', 'scripts/**', '.github/workflows/obs-test.yml']
+  workflow_dispatch:
+jobs:
+  obs:
+    runs-on: windows-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OBS_VERSION: ${{ vars.OBS_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - shell: pwsh
+        run: ./scripts/fetch-obs.ps1
+      - run: node scripts/obs-integration.js

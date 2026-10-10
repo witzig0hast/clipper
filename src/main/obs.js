@@ -39,6 +39,25 @@ function locateObs(extraRoots = []) {
   return null;
 }
 
+/** Windows: Fenster eines Prozesses (sichtbar/unsichtbar, mit Titel) – zur Fehlersuche und Fensterprüfung. */
+function listWindows(pid) {
+  if (process.platform !== 'win32' || !pid) return [];
+  const ps = `
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+public class W { public delegate bool EP(IntPtr h, IntPtr l);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(EP p, IntPtr l);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+ public static List<string> Get(uint pid){ var r=new List<string>(); EnumWindows((h,l)=>{uint p; GetWindowThreadProcessId(h,out p); if(p==pid){var sb=new StringBuilder(256); GetWindowText(h,sb,256); r.Add((IsWindowVisible(h)?"VISIBLE":"hidden")+"|"+sb.ToString());} return true;}, IntPtr.Zero); return r; } }
+"@
+[W]::Get(${pid}) | ForEach-Object { $_ }`;
+  try {
+    return require('child_process').execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 30000 }).toString().split(/\r?\n/).filter(Boolean);
+  } catch (e) { return [`(Fensterabfrage fehlgeschlagen: ${e.message})`]; }
+}
+
 const ENC_FALLBACK = { nvenc: 'NVIDIA NVENC', amd: 'AMD AMF', qsv: 'Intel QuickSync', x264: 'CPU (x264)' };
 
 class ObsEngine extends EventEmitter {
@@ -80,6 +99,23 @@ class ObsEngine extends EventEmitter {
       }
       if (isObs) { process.kill(pid); this.log(`Verwaistes OBS (${pid}) beendet.`); }
     } catch { /* keine Datei */ }
+  }
+
+  /** Ende von OBS' eigener Logdatei (zeigt z. B. Grafik-Initialisierungsfehler). */
+  readObsLog(lines = 60) {
+    try {
+      const dir = path.join(this.obsConfigDir(), 'logs');
+      const f = fs.readdirSync(dir).filter((n) => n.endsWith('.txt')).sort().pop();
+      if (!f) return '';
+      return fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).slice(-lines).join('\n');
+    } catch { return ''; }
+  }
+
+  /** Zustand für die Fehlersuche festhalten (bevor OBS beendet wird). */
+  snapshot() {
+    this.failDiag = { obsLog: this.readObsLog(), windows: this.proc ? listWindows(this.proc.pid) : [] };
+    this.log(`OBS-Log:\n${this.failDiag.obsLog}`);
+    if (this.failDiag.windows.length) this.log(`OBS-Fenster: ${this.failDiag.windows.join('; ')}`);
   }
 
   get available() { return !!this.obs; }
@@ -249,6 +285,7 @@ class ObsEngine extends EventEmitter {
       for (const plan of order) {
         try { await this.tryStart(c, plan); return; } catch (e) {
           lastErr = e; this.log(`Start mit ${plan.mode}/${plan.id} fehlgeschlagen: ${e.message}`);
+          this.snapshot();
           await this.killAll();
           if (plan.id === 'obs_x264' || plan.id === 'x264') break;
           if (plan.last) {
@@ -353,4 +390,4 @@ class ObsEngine extends EventEmitter {
   }
 }
 
-module.exports = { ObsEngine, locateObs, ENC_FALLBACK };
+module.exports = { ObsEngine, locateObs, listWindows, ENC_FALLBACK };

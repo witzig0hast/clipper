@@ -7,32 +7,13 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync, execFileSync } = require('child_process');
-const { ObsEngine } = require('../src/main/obs');
+const { spawnSync } = require('child_process');
+const { ObsEngine, listWindows } = require('../src/main/obs');
 const T = require('../src/main/timeline');
 const E = require('../src/main/exporter');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fail = (m) => { console.log(`::error::${m}`); process.exitCode = 1; };
-
-/** Windows: Fenster eines Prozesses auflisten (sichtbar/unsichtbar). */
-function windowsOf(pid) {
-  if (process.platform !== 'win32') return [];
-  const ps = `
-Add-Type @"
-using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
-public class W { public delegate bool EP(IntPtr h, IntPtr l);
- [DllImport("user32.dll")] public static extern bool EnumWindows(EP p, IntPtr l);
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
- [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
- [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
- public static List<string> Get(uint pid){ var r=new List<string>(); EnumWindows((h,l)=>{uint p; GetWindowThreadProcessId(h,out p); if(p==pid){var sb=new StringBuilder(256); GetWindowText(h,sb,256); r.Add((IsWindowVisible(h)?"VISIBLE":"hidden")+"|"+sb.ToString());} return true;}, IntPtr.Zero); return r; } }
-"@
-[W]::Get(${pid}) | ForEach-Object { $_ }`;
-  try {
-    return execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 30000 }).toString().split(/\r?\n/).filter(Boolean);
-  } catch (e) { return [`(Fensterabfrage fehlgeschlagen: ${e.message})`]; }
-}
 
 async function scenario(name, cfg, { clip = true } = {}) {
   console.log(`\n=== Szenario: ${name} ===`);
@@ -48,12 +29,13 @@ async function scenario(name, cfg, { clip = true } = {}) {
     await eng.start({ fps: 30, height: 720, bitrateMbps: 6, encoder: 'cpu', hw: null, systemAudio: true, micAudio: false, captureMode: 'auto', baseW: 1280, baseH: 720, monitorIndex: 0, ...cfg });
   } catch (e) {
     console.log(`Start fehlgeschlagen: ${e.message}`);
-    console.log('--- OBS-Log (Ende) ---\n' + logs.slice(-40).join('\n'));
+    if (eng.failDiag) console.log(`--- OBS-Logdatei (Ende) ---\n${eng.failDiag.obsLog}\n--- OBS-Fenster ---\n${eng.failDiag.windows.join('\n')}`);
+    console.log('--- Engine-Log (Ende) ---\n' + logs.slice(-15).join('\n'));
     await eng.stop().catch(() => {});
     return false;
   }
   console.log(`gestartet nach ${Date.now() - t0} ms | Plan ${eng.encPlan.mode}/${eng.encPlan.id} | Quellen: ${(eng.sources || []).join(', ')}`);
-  const wins = windowsOf(eng.proc && eng.proc.pid);
+  const wins = listWindows(eng.proc && eng.proc.pid);
   if (wins.length) {
     console.log('Fenster von OBS:\n  ' + wins.join('\n  '));
     const vis = wins.filter((w) => w.startsWith('VISIBLE|') && w.length > 8);
