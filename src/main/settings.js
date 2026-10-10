@@ -13,7 +13,7 @@ const defaults = () => ({
   systemAudio: true,
   micAudio: false,
   screenIndex: -1,           // -1 = Hauptbildschirm
-  captureMode: 'auto',       // auto = Spiel + Bildschirm | game | display
+  captureMode: 'game',       // game = nur Spielaufnahme (am schlankesten) | auto = Spiel + Bildschirm-Reserve | display
   encoder: 'auto',         // auto = Grafikkarte wenn möglich | cpu
   games: DEFAULT_GAMES,
   hotkey: 'Alt+F10',

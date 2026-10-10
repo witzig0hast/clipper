@@ -111,10 +111,11 @@ function engineConfig() {
     fps: s.fps, height: s.resolution === 'native' ? null : Number(s.resolution), bitrateMbps: s.bitrateMbps,
     encoder: s.encoder, hw: HW_MAP[hwEncoder] || null, systemAudio: s.systemAudio, micAudio: s.micAudio,
     captureMode: s.captureMode, baseW: d ? d.width : 1920, baseH: d ? d.height : 1080, monitorIndex: d ? d.index : 0,
+    gameExe: state.game || null,
     testSource: SELFTEST,
   };
 }
-const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex]);
+const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex, !!c.gameExe && engine && !engine.running ? c.gameExe : null]);
 
 // ---- Puffer ----------------------------------------------------------------
 function pruneBuffer() { engine.prune(cfg().bufferMinutes * 60, (f) => pinned.has(f)); }
@@ -157,6 +158,7 @@ async function pollGame() {
   if (found !== state.game) {
     state.game = found;
     state.override = null; // neues Spiel / Spielende -> wieder automatisch
+    if (engine.running && found) engine.setGame(found);
     applyRecording();
   }
 }

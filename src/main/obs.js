@@ -294,6 +294,19 @@ class ObsEngine extends EventEmitter {
     }
   }
 
+  /** Einstellungen der Spielaufnahme: auf das erkannte Spiel (per EXE-Name) oder beliebiges Vollbild. */
+  gameSettings(exe) {
+    const base = { capture_cursor: true, allow_transparency: false, anti_cheat_hook: true };
+    // priority 2 = nur nach Programmdatei suchen; OBS sucht das Fenster laufend selbst, auch wenn es erst später erscheint
+    return exe ? { ...base, capture_mode: 'window', priority: 2, window: `::${exe}` } : { ...base, capture_mode: 'any_fullscreen' };
+  }
+
+  /** Spiel wechselt (z. B. im "Immer"-Modus): Spielaufnahme live umstellen, ohne Neustart. */
+  async setGame(exe) {
+    if (!this.running || !this.ws || !(this.sources || []).includes('clipper-game')) return;
+    try { await this.ws.request('SetInputSettings', { inputName: 'clipper-game', inputSettings: this.gameSettings(exe), overlay: true }); } catch (e) { this.log(`Spielwechsel fehlgeschlagen: ${e.message}`); }
+  }
+
   /** Quellen anlegen. Gibt zurück, welche Bildquellen aktiv sind. */
   async setupSources(c) {
     const r = (t, d) => this.ws.request(t, d);
@@ -312,7 +325,7 @@ class ObsEngine extends EventEmitter {
       if (await add('clipper-test', 'color_source_v3', { color: 0xff3366aa, width: c.baseW || 1920, height: c.baseH || 1080 })) video++;
     } else if (win) {
       if (c.captureMode !== 'game') { if (await add('clipper-display', 'monitor_capture', { monitor: c.monitorIndex || 0, capture_cursor: true })) video++; }
-      if (c.captureMode !== 'display') { if (await add('clipper-game', 'game_capture', { capture_mode: 'any_fullscreen', capture_cursor: true, allow_transparency: false, anti_cheat_hook: true })) video++; }
+      if (c.captureMode !== 'display') { if (await add('clipper-game', 'game_capture', this.gameSettings(c.gameExe))) video++; }
     } else if (await add('clipper-screen', 'xshm_input', { screen: 0 })) video++;
     if (!video) throw new Error('Keine Bildquelle in OBS verfügbar.');
     if (c.systemAudio) await add('clipper-desktop-audio', win ? 'wasapi_output_capture' : 'pulse_output_capture', { device_id: 'default' });
@@ -449,6 +462,7 @@ class ObsEngine extends EventEmitter {
   startStats() {
     clearInterval(this.statsTimer);
     let prev = null, bad = 0;
+    const t0 = Date.now();
     this.statsTimer = setInterval(async () => {
       if (!this.ws || !this.running) return;
       try {
@@ -463,7 +477,8 @@ class ObsEngine extends EventEmitter {
           const dT = s.renderTotalFrames - prev.renderTotal, dS = s.renderSkippedFrames - prev.renderSkipped;
           const dOT = st.outputTotalFrames - prev.outTotal, dOS = st.outputSkippedFrames - prev.outSkipped;
           const ratio = dT > 20 ? dS / dT : 0, oratio = dOT > 20 ? dOS / dOT : 0;
-          bad = ratio > 0.03 || oratio > 0.05 ? bad + 1 : 0;
+          // Anlaufphase (erste 25 s) zählt nicht – dort sind verpasste Frames normal
+          bad = Date.now() - t0 > 25000 && (ratio > 0.03 || oratio > 0.05) ? bad + 1 : 0;
           if (bad >= 3) { bad = 0; this.emit('overload', { ratio, oratio }); }
         }
         prev = { renderTotal: s.renderTotalFrames, renderSkipped: s.renderSkippedFrames, outTotal: st.outputTotalFrames, outSkipped: st.outputSkippedFrames };

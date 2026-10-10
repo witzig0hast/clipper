@@ -81,7 +81,7 @@ async function scenario(name, cfg, { clip = true } = {}) {
   if (!a) fail('Szenario A fehlgeschlagen');
   if (process.platform === 'win32') {
     // Echte Quellen: auf Runnern ohne Grafikkarte evtl. nicht möglich -> nur informativ
-    const b = await scenario('Echte Quellen (Display + Spiel + Systemton) – informativ', { testSource: false }, { clip: false });
+    const b = await scenario('Echte Quellen (Spielaufnahme auf explorer.exe + Display-Reserve + Systemton) – informativ', { testSource: false, captureMode: 'auto', gameExe: 'explorer.exe' }, { clip: false });
     console.log(`Szenario B (informativ): ${b ? 'OK' : 'nicht möglich auf diesem Rechner'}`);
     // Kaskade: Hardware-Encoder gewünscht, aber (auf Runner ohne GPU) nicht vorhanden -> muss sauber auf x264 zurückfallen
     const c = await scenario('Hardware-Encoder nicht verfügbar -> Fallback (muss funktionieren)', { testSource: true, hw: 'nvenc', encoder: 'auto', expectFallback: true, noDetect: true }, { clip: false });
