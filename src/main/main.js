@@ -19,6 +19,10 @@ const APP_ID = 'de.hastnetwork.clipper';
 const SELFTEST = process.argv.includes('--selftest');   // CI: komplette App mit Testquelle durchspielen
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 
+// Unerwartete Fehler nie als Dialog zeigen (das könnte ein Spiel in den Hintergrund holen) – nur protokollieren.
+process.on('uncaughtException', (e) => { logLines.push(`uncaughtException: ${e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e}`); });
+process.on('unhandledRejection', (e) => { logLines.push(`unhandledRejection: ${e && e.message ? e.message : e}`); });
+
 // Die Oberfläche braucht keine GPU – so konkurriert Clipper nie mit dem Spiel um die Grafikkarte.
 app.disableHardwareAcceleration();
 app.setAppUserModelId(APP_ID);

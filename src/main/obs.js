@@ -339,6 +339,11 @@ class ObsEngine extends EventEmitter {
    */
   async start(cfg) {
     if (!this.obs) throw new Error('OBS wurde nicht gefunden (Installation unvollständig).');
+    if (this.obs.root) {
+      try { fs.mkdirSync(this.obsConfigDir(), { recursive: true }); fs.accessSync(this.obsConfigDir(), fs.constants.W_OK); } catch {
+        throw new Error('Der Clipper-Ordner ist nicht beschreibbar. Bitte Clipper nur für den aktuellen Benutzer installieren (nicht „für alle Benutzer“).');
+      }
+    }
     if (this.running || this.starting) return;
     this.starting = true; this.stopping = false; this.lastError = '';
     try {

@@ -25,7 +25,7 @@ npm run dist        # -> dist\Clipper Setup 1.0.0.exe
 
 ## Performance (wichtig fürs Gaming)
 Clipper nimmt **nicht selbst** auf, sondern steuert ein mitgeliefertes **OBS Studio** unsichtbar im Hintergrund –
-dieselbe Technik wie bei Streamern mit 150+ FPS: **Spielaufnahme (Game Capture)** + **Hardware-Encoder**
+dieselbe Technik wie bei Streamern mit 150+ FPS: **Spielaufnahme (Game Capture, direkt auf dein erkanntes Spiel gerichtet)** + **Hardware-Encoder**
 (NVIDIA NVENC / AMD AMF / Intel QuickSync). OBS streamt nur lokal (127.0.0.1) an Clipper, das den Strom ohne
 Neu-Kodieren (`-c copy`) in 10-s-Segmente schreibt. **Clips entstehen ebenfalls ohne Neu-Kodieren** – beim Speichern
 fällt also keine GPU-/CPU-Last an.
@@ -39,6 +39,9 @@ Zusätzliche Schutzmechanismen:
 - Unter *Einstellungen → Diagnose* siehst du live OBS-CPU, FPS und verpasste Frames.
 
 ## Hinweise
+- Installiere Clipper **nur für den aktuellen Benutzer** (Standard) – OBS legt seine Konfiguration im Programmordner ab.
+- Aufnahme-Art: *Spielaufnahme* (Standard, am schlankesten) · *Spiel + Bildschirm-Reserve* · *Nur Bildschirm*. Bei schwarzem Bild eine der anderen wählen.
+- Das mitgelieferte OBS belegt ca. 120–250 MB RAM, solange aufgenommen wird; ohne Aufnahme läuft nichts davon.
 - Spiele am besten in **„Vollbild-Fenster“ / „Rahmenlos“** laufen lassen. Bei exklusivem Vollbild kann das Bild schwarz sein.
 - Der Puffer liegt als temporäre Segmente in `%APPDATA%\Clipper\buffer` (ca. 1,8 GB bei 20 min / 12 Mbit/s) und wird beim Beenden gelöscht.
 - Der Installer ist durch das mitgelieferte OBS ca. 100–150 MB groß.
