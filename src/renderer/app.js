@@ -109,21 +109,27 @@ function renderState() {
   $('#bufMax').textContent = fmtTime(s.bufferMax);
   $('#meterFill').style.width = `${Math.min(100, (s.bufferSeconds / s.bufferMax) * 100)}%`;
   $('#bufSize').textContent = `${fmtBytes(s.bufferBytes)} Zwischenspeicher`;
-  const encNames = { h264_nvenc: 'NVIDIA NVENC', h264_amf: 'AMD AMF', h264_qsv: 'Intel QuickSync', libx264: 'CPU (x264)' };
+  const encNames = { nvenc: 'NVIDIA NVENC', amd: 'AMD AMF', qsv: 'Intel QuickSync', x264: 'CPU (x264)',
+    h264_nvenc: 'NVIDIA NVENC', h264_amf: 'AMD AMF', h264_qsv: 'Intel QuickSync', libx264: 'CPU (x264)' };
   const cap = s.capture;
   const chip = $('#encChip');
   if (cap) {
-    const soft = cap.enc === 'libx264';
+    const soft = cap.enc === 'x264';
     chip.textContent = `Aufnahme: ${encNames[cap.enc]}${soft ? ' – belastet die CPU' : ' (GPU)'}`;
     chip.style.color = soft ? 'var(--warn)' : 'var(--ok)';
   } else {
-    chip.textContent = s.hwEncoder ? `Encoder: ${encNames[s.hwEncoder]}` : 'Encoder wird geprüft …';
+    chip.textContent = s.hwEncoder ? `Grafikkarte: ${encNames[s.hwEncoder]}` : 'Encoder wird geprüft …';
     chip.style.color = '';
   }
   $('#encHint').textContent = s.hwEncoder
-    ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte für Aufnahme und Export – kaum FPS-Verlust.`
+    ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte für die Aufnahme – kaum FPS-Verlust.`
     : 'Keine Hardware-Encoder gefunden – der Prozessor wird genutzt (kann FPS kosten).';
-
+  let noticeEl = $('#notice');
+  const msg = !s.obsAvailable ? 'Aufnahme-Modul (OBS) fehlt – bitte Clipper neu installieren.' : s.notice;
+  if (msg) {
+    if (!noticeEl) { noticeEl = h('div', { id: 'notice', class: 'notice' }); $('#hero').after(noticeEl); }
+    noticeEl.textContent = msg;
+  } else if (noticeEl) noticeEl.remove();
   renderDiag(s);
   const max = Math.max(5, Math.floor(s.bufferSeconds));
   const slider = $('#clipLen');
@@ -137,13 +143,12 @@ function renderState() {
 
 function diagText(s) {
   const d = s.diag || {};
+  const st = d.stats;
   return [
-    `Plattform: ${d.platform} | Hardware-Encoder: ${d.hw || 'keiner'} | Export: ${s.encoder}`,
-    `Funktionierende Aufnahme-Methoden: ${(d.combos || []).map((c) => `${c.src}+${c.enc}`).join(', ') || 'keine'}`,
-    `Aktiv: ${s.capture ? `${s.capture.src}+${s.capture.enc}` : '–'} | läuft: ${s.recording} | Audio: ${s.audioActive}`,
-    `ffmpeg: ${d.stats || '–'}`,
-    `Befehl: ${d.cmd || '–'}`,
-    d.ffmpegLog ? `Log: ${d.ffmpegLog}` : '',
+    `Plattform: ${d.platform} | Grafikkarten-Encoder: ${d.hw || 'keiner'} | OBS: ${d.obs || 'nicht gefunden'}`,
+    `Aktiv: ${s.recording ? 'ja' : 'nein'} | Plan: ${d.plan ? `${d.plan.mode}/${d.plan.id}` : '–'} | Entlastungsstufe: ${d.degrade}`,
+    st ? `OBS: CPU ${st.cpu.toFixed(1)} % | RAM ${Math.round(st.memMB)} MB | ${st.fps.toFixed(1)} FPS | Render ${st.renderMs.toFixed(1)} ms | verpasste Render-Frames ${st.renderSkipped}/${st.renderTotal} | verworfene Ausgabe-Frames ${st.outSkipped}/${st.outTotal}` : 'OBS: –',
+    d.log ? `Log:\n${d.log}` : '',
   ].filter(Boolean).join('\n');
 }
 function renderDiag(s) { if ($('#page-settings').classList.contains('active')) $('#diagBox').textContent = diagText(s); }
@@ -274,7 +279,7 @@ function bindRange(id, out, fmt) {
   el.onchange = () => save({ [id]: Number(el.value) });
 }
 bindSeg('mode'); bindSeg('fps', true);
-bindSelect('screenId'); bindSelect('resolution'); bindSelect('encoder'); bindSelect('micDeviceId'); bindSelect('hotkeySeconds', true);
+bindSelect('screenIndex', true); bindSelect('captureMode'); bindSelect('resolution'); bindSelect('encoder'); bindSelect('hotkeySeconds', true);
 ['systemAudio', 'micAudio', 'beep', 'notify', 'openAtLogin', 'startHidden'].forEach(bindToggle);
 bindRange('bufferMinutes', '#o-buffer', (v) => `${v} min`);
 bindRange('bitrateMbps', '#o-bitrate', (v) => `${v} Mbit/s`);
@@ -292,23 +297,16 @@ function syncSettings() {
   $('#s-hotkey').textContent = s.hotkey || 'Nicht belegt';
   $('#hotkeyHint').textContent = s.hotkey || '–';
   $('#dirLabel').textContent = s.clipsDir;
-  $('#micRow').hidden = !s.micAudio;
   $('#s-notify').closest('.row-set').querySelector('span').textContent = 'Kleine Meldung, sobald ein Clip fertig ist.';
   renderGames();
 }
 
 async function refreshSettingsLists() {
   const screens = await api.listScreens();
-  const sel = $('#s-screenId');
-  sel.replaceChildren(...screens.map((sc, i) => h('option', { value: sc.id }, `${sc.name}${sc.primary ? ' (Hauptbildschirm)' : ''}`)));
-  const primary = screens.find((s) => s.primary) || screens[0];
-  sel.value = screens.some((s) => s.id === settings.screenId) ? settings.screenId : (primary ? primary.id : '');
-  try {
-    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
-    const ms = $('#s-micDeviceId');
-    ms.replaceChildren(h('option', { value: '' }, 'Standard-Mikrofon'), ...devs.filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications').map((d) => h('option', { value: d.deviceId }, d.label || 'Mikrofon')));
-    ms.value = settings.micDeviceId;
-  } catch { /* egal */ }
+  const sel = $('#s-screenIndex');
+  sel.replaceChildren(...screens.map((sc) => h('option', { value: sc.index }, `${sc.name} – ${sc.width}×${sc.height}${sc.primary ? ' (Hauptbildschirm)' : ''}`)));
+  const primary = screens.find((x) => x.primary) || screens[0];
+  sel.value = screens.some((x) => x.index === settings.screenIndex) ? settings.screenIndex : (primary ? primary.index : 0);
   const procs = await api.listProcesses();
   $('#procList').replaceChildren(...procs.filter((p) => p.endsWith('.exe')).map((p) => h('option', { value: p })));
 }
@@ -380,8 +378,6 @@ api.onClipSaved((info) => {
   if (settings && settings.beep) beep();
   toast(`Clip gespeichert: ${info.name}`, 'success');
 });
-api.onRecordingSet(({ on, config }) => { on ? Recorder.start(config) : Recorder.stop(); });
-api.onFlush(() => Recorder.flush());
 
 (async function init() {
   settings = await api.getSettings();

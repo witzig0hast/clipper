@@ -2,7 +2,7 @@
 
 const {
   app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, dialog, shell,
-  desktopCapturer, session, screen, nativeImage, Notification,
+  session, screen, nativeImage, Notification,
 } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -13,7 +13,7 @@ const settingsStore = require('./settings');
 const { detectGame, listProcesses, DEFAULT_GAMES } = require('./games');
 const timeline = require('./timeline');
 const exporter = require('./exporter');
-const { VideoCapture } = require('./capture');
+const { ObsEngine } = require('./obs');
 
 const APP_ID = 'de.hastnetwork.clipper';
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
@@ -29,22 +29,21 @@ let quitting = false;
 let ffmpeg = null;
 let encoder = 'libx264';
 let hwEncoder = null;
-let video = null;
+let engine = null;
+let hwReady = Promise.resolve();
+const logLines = [];
 
 // ---- Zustand ---------------------------------------------------------------
 const state = {
   game: null,          // erkannter Spiel-Prozess
   override: null,      // true/false = manuell erzwungen, null = automatisch
-  rendererActive: false,   // Audio-Recorder im Renderer läuft
-  videoActive: false,      // ffmpeg-Bildschirmaufnahme läuft
-  videoKey: '',
+  engineKey: '',       // Konfiguration, mit der die Aufnahme gerade läuft
   error: null,
+  notice: null,        // z. B. automatische Entlastung
   exports: 0,
   lastDesired: false,
+  crashes: 0,
 };
-
-/** @type {Map<number,{id:number,file:string,startedAt:number,endedAt:number,final:boolean,size:number}>} */
-const segments = new Map();
 const pinned = new Set();
 let bufferDir = null;
 
@@ -63,29 +62,27 @@ function modeWantsRecording() {
 }
 const desired = () => (state.override !== null ? state.override : modeWantsRecording());
 
-function bufferBytes() {
-  let n = 0;
-  for (const s of segments.values()) n += s.size || 0;
-  for (const v of video.segments()) { try { n += fs.statSync(v.file).size; } catch { /* egal */ } }
-  return n;
-}
-const segList = () => [...segments.values()].filter((s) => s.endedAt > s.startedAt);
-
 function publicState() {
   return {
-    recording: state.videoActive,
+    recording: !!engine.running,
+    starting: !!engine.starting,
     desired: desired(),
     mode: cfg().mode,
     override: state.override,
     game: state.game,
-    bufferSeconds: timeline.bufferedSeconds(video.segments()),
-    bufferBytes: bufferBytes(),
+    bufferSeconds: engine.bufferedSeconds(),
+    bufferBytes: engine.bytes(),
     bufferMax: cfg().bufferMinutes * 60,
     encoder,
     hwEncoder,
-    capture: video.combo,
-    diag: { combos: video.combos, stats: video.stats, cmd: video.cmd, ffmpegLog: video.lastError, hw: hwEncoder, platform: process.platform },
-    audioActive: state.rendererActive,
+    capture: engine.running ? { enc: engine.encoder, mode: engine.encPlan && engine.encPlan.mode, id: engine.encPlan && engine.encPlan.id } : null,
+    degrade: engine.degrade,
+    notice: state.notice,
+    obsAvailable: engine.available,
+    diag: {
+      platform: process.platform, hw: hwEncoder, plan: engine.encPlan || null, stats: engine.stats, degrade: engine.degrade,
+      obs: engine.obs ? engine.obs.exe : null, log: logLines.slice(-25).join('\n'),
+    },
     error: state.error,
     exports: state.exports,
     clipsDir: cfg().clipsDir,
@@ -93,106 +90,61 @@ function publicState() {
 }
 const broadcastState = () => { send('state', publicState()); updateTray(); };
 
-const audioConfig = () => {
-  const s = cfg();
-  return { systemAudio: s.systemAudio, micAudio: s.micAudio, micDeviceId: s.micDeviceId, bitrateMbps: 0 };
-};
+const HW_MAP = { h264_nvenc: 'nvenc', h264_amf: 'amd', h264_qsv: 'qsv' };
 
-/** Welcher Monitor (Index für Desktop Duplication + Rechteck für GDI)? */
-async function resolveDisplay() {
-  const displays = screen.getAllDisplays();
-  let display = screen.getPrimaryDisplay();
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-    const src = sources.find((x) => x.id === cfg().screenId);
-    if (src) display = displays.find((d) => String(d.id) === String(src.display_id)) || display;
-  } catch { /* Hauptbildschirm */ }
-  let b = display.bounds;
-  if (process.platform === 'win32' && screen.dipToScreenRect) b = screen.dipToScreenRect(null, b);
-  return { outputIdx: Math.max(0, displays.findIndex((d) => d.id === display.id)), rect: { x: b.x, y: b.y, width: b.width, height: b.height } };
+function displays() {
+  return screen.getAllDisplays().map((d, i) => ({
+    index: i, id: d.id, primary: d.id === screen.getPrimaryDisplay().id,
+    name: d.label || `Bildschirm ${i + 1}`,
+    width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor),
+  }));
 }
-const videoConfig = async () => {
+
+/** Einstellungen für die OBS-Engine. */
+function engineConfig() {
   const s = cfg();
-  return { fps: s.fps, resolution: s.resolution, bitrateMbps: s.bitrateMbps, ...(await resolveDisplay()) };
-};
+  const list = displays();
+  const d = list.find((x) => x.index === s.screenIndex) || list.find((x) => x.primary) || list[0];
+  return {
+    fps: s.fps, height: s.resolution === 'native' ? null : Number(s.resolution), bitrateMbps: s.bitrateMbps,
+    encoder: s.encoder, hw: HW_MAP[hwEncoder] || null, systemAudio: s.systemAudio, micAudio: s.micAudio,
+    captureMode: s.captureMode, baseW: d ? d.width : 1920, baseH: d ? d.height : 1080, monitorIndex: d ? d.index : 0,
+  };
+}
+const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex]);
 
 // ---- Puffer ----------------------------------------------------------------
-function clearBuffer() {
-  video.clear();
-  for (const s of segments.values()) fs.promises.unlink(s.file).catch(() => {});
-  segments.clear();
-}
-
-function pruneBuffer() {
-  const keep = cfg().bufferMinutes * 60;
-  video.prune(keep, (f) => pinned.has(f));
-  for (const s of timeline.expiredSegments(segList(), keep)) {
-    if (pinned.has(s.file)) continue;
-    segments.delete(s.id);
-    fs.promises.unlink(s.file).catch(() => {});
-  }
-}
-
-async function saveSegment(meta, data) {
-  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer || data, data.byteOffset || 0, data.byteLength);
-  if (!buf.length) return;
-  const existing = segments.get(meta.id);
-  if (existing && existing.final && meta.partial) return; // fertige Version nicht durch Teilstück ersetzen
-  const file = path.join(bufferDir, `seg-${meta.id}.webm`);
-  if (pinned.has(file) && existing) return; // gerade im Export in Benutzung
-  const tmp = `${file}.tmp`;
-  try {
-    await fs.promises.writeFile(tmp, buf);
-    await fs.promises.rename(tmp, file);
-  } catch (e) {
-    fs.promises.unlink(tmp).catch(() => {});
-    return;
-  }
-  segments.set(meta.id, {
-    id: meta.id, file, startedAt: meta.startedAt, endedAt: meta.endedAt,
-    final: !meta.partial, size: buf.length,
-  });
-  pruneBuffer();
-}
-
-// Fordert den Recorder auf, laufende Segmente zu übergeben, damit der Clip bis "jetzt" reicht.
-const flushWaiters = new Map();
-function flushRecorder() {
-  if (!state.rendererActive) return Promise.resolve();
-  return new Promise((resolve) => {
-    const token = crypto.randomUUID();
-    const timer = setTimeout(() => { flushWaiters.delete(token); resolve(); }, 6000);
-    flushWaiters.set(token, () => { clearTimeout(timer); resolve(); });
-    send('flush', token);
-  });
-}
+function pruneBuffer() { engine.prune(cfg().bufferMinutes * 60, (f) => pinned.has(f)); }
 
 // ---- Aufnahme-Steuerung ----------------------------------------------------
-let videoQueue = Promise.resolve();
-function syncVideo(want) {
-  videoQueue = videoQueue.then(async () => {
-    const wantKey = want ? JSON.stringify([cfg().fps, cfg().resolution, cfg().bitrateMbps, cfg().screenId, cfg().encoder]) : '';
-    if (wantKey === state.videoKey && video.running === want) return;
-    if (video.running) await video.stop();
-    state.videoKey = '';
+let engineQueue = Promise.resolve();
+function syncEngine() {
+  engineQueue = engineQueue.then(async () => {
+    const want = desired();
+    if (want) await hwReady;
+    const c = want ? engineConfig() : null;
+    const key = want ? engineKeyOf(c) : '';
+    if (want && engine.running && key === state.engineKey) return;
+    if (!want && !engine.running && !engine.starting) { state.engineKey = ''; broadcastState(); return; }
+    if (engine.running) await engine.stop();
+    state.engineKey = '';
     if (want) {
       try {
-        await video.start(await videoConfig(), cfg().encoder === 'cpu');
-        state.videoKey = wantKey; state.error = null;
+        if (!state.lastDesired) engine.clear();
+        await engine.start(c);
+        state.engineKey = key; state.error = null; state.crashes = 0;
       } catch (e) { state.error = e.message; toast(`Aufnahme-Fehler: ${e.message}`, 'error'); }
     }
-    state.videoActive = video.running;
+    state.lastDesired = want;
     broadcastState();
-  }).catch(() => {});
-  return videoQueue;
+  }).catch((e) => { logLines.push(`syncEngine: ${e.message}`); });
+  return engineQueue;
 }
 
 function applyRecording() {
   const want = desired();
-  if (want && !state.lastDesired) { clearBuffer(); state.error = null; }
-  state.lastDesired = want;
-  send('recording:set', { on: want, config: audioConfig() });
-  syncVideo(want);
+  if (want && !state.lastDesired) { state.error = null; state.notice = null; engine.degrade = 0; }
+  syncEngine();
   broadcastState();
 }
 
@@ -250,22 +202,16 @@ async function createClip(seconds) {
   const id = crypto.randomUUID();
   const pin = [];
   try {
-    await flushRecorder();
-    const vsegs = video.segments();
-    if (!vsegs.length) throw new Error('Der Puffer ist noch leer – es läuft noch keine Aufnahme.');
-    const we = timeline.bufferEnd(vsegs);
-    const ws = Math.max(we - seconds * 1000, Math.min(...vsegs.map((x) => x.startedAt)));
-    const v = timeline.planWindow(vsegs, ws, we);
-    const a = timeline.planWindow(segList(), ws, we);
-    if (!v.parts.length) throw new Error('Der Puffer ist noch leer.');
-    for (const p of [...v.parts, ...a.parts]) { pinned.add(p.file); pin.push(p.file); }
+    const tl = await engine.timeline();
+    const plan = timeline.planTail(tl, seconds);
+    if (!plan.parts.length) throw new Error('Der Puffer ist noch leer – es läuft noch keine Aufnahme.');
+    for (const p of plan.parts) { pinned.add(p.file); pin.push(p.file); }
     await fs.promises.mkdir(s.clipsDir, { recursive: true });
     const game = state.game ? ` ${state.game.replace(/\.exe$/i, '')}` : '';
     const out = uniquePath(s.clipsDir, `Clip ${stamp()}${game}`);
-    const label = 'Clip wird erstellt …';
+    const label = 'Clip wird gespeichert …';
     send('export:progress', { id, label, progress: 0 });
-    const duration = await exporter.exportClip(ffmpeg, { ws, we, video: v, audio: a.parts.length ? a : null }, out,
-      exportOpts((p) => send('export:progress', { id, label, progress: p })));
+    const duration = await exporter.exportClipCopy(ffmpeg, plan, out, { onProgress: (p) => send('export:progress', { id, label, progress: p }) });
     send('export:progress', { id, done: true });
     ensureThumb(out).then(() => send('clips:changed')).catch(() => {});
     const info = { file: out, name: path.basename(out), duration };
@@ -323,7 +269,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false,
-      backgroundThrottling: false, // Aufnahme muss auch bei verstecktem Fenster flüssig laufen
+      backgroundThrottling: true,
     },
   });
   win.setMenuBarVisibility(false);
@@ -342,7 +288,7 @@ function showWindow(page) {
 
 function updateTray() {
   if (!tray) return;
-  const rec = state.videoActive;
+  const rec = engine.running;
   tray.setToolTip(rec ? `Clipper – nimmt auf${state.game ? ` (${state.game})` : ''}` : 'Clipper – Aufnahme pausiert');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Clipper öffnen', click: () => showWindow() },
@@ -387,9 +333,10 @@ function setupIpc() {
     if ('hotkey' in patch) registerHotkey();
     if ('openAtLogin' in patch) applyStartup();
     if ('encoder' in patch) encoder = next.encoder === 'cpu' ? 'libx264' : (hwEncoder || 'libx264');
+    if ('bufferMinutes' in patch) pruneBuffer();
     if ('clipsDir' in patch) send('clips:changed');
     if ('mode' in patch && patch.mode !== before.mode) { state.override = null; await pollGame(); }
-    if (['mode', 'fps', 'resolution', 'bitrateMbps', 'systemAudio', 'micAudio', 'micDeviceId', 'screenId', 'bufferMinutes', 'encoder']
+    if (['mode', 'fps', 'resolution', 'bitrateMbps', 'systemAudio', 'micAudio', 'screenIndex', 'captureMode', 'encoder']
       .some((k) => k in patch)) applyRecording();
     else broadcastState();
     return next;
@@ -440,50 +387,33 @@ function setupIpc() {
       throw e;
     } finally { state.exports--; broadcastState(); }
   });
-  ipcMain.handle('screens:list', async () => {
-    const primary = screen.getPrimaryDisplay().id;
-    const src = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-    return src.map((s, i) => ({
-      id: s.id, name: s.name || `Bildschirm ${i + 1}`,
-      primary: String(s.display_id) === String(primary),
-    }));
-  });
+  ipcMain.handle('screens:list', () => displays());
   ipcMain.handle('processes:list', () => listProcesses());
   ipcMain.handle('dialog:folder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: cfg().clipsDir });
     return r.canceled ? null : r.filePaths[0];
   });
 
-  ipcMain.handle('segment:save', (_e, meta, buf) => saveSegment(meta, buf));
-  ipcMain.on('recorder:status', (_e, st) => {
-    state.rendererActive = !!st.active;
-    if (st.error) toast(`Ton-Aufnahme nicht möglich: ${st.error}`, 'error'); // Video läuft trotzdem weiter
-    broadcastState();
-  });
   ipcMain.on('renderer:ready', () => { applyRecording(); });
-  ipcMain.on('flush:done', (_e, token) => { const f = flushWaiters.get(token); if (f) { flushWaiters.delete(token); f(); } });
 }
 
-function setupCapture() {
-  // Bildschirm + System-Audio (Loopback) für getDisplayMedia im Renderer
-  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
-    try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-      const wanted = cfg().screenId;
-      const primary = String(screen.getPrimaryDisplay().id);
-      const src = sources.find((s) => s.id === wanted) || sources.find((s) => String(s.display_id) === primary) || sources[0];
-      callback(cfg().systemAudio ? { video: src, audio: 'loopback' } : { video: src });
-    } catch { callback({}); }
-  }, { useSystemPicker: false });
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(['media', 'display-capture'].includes(permission)));
+function setupSecurity() {
+  // Die Oberfläche braucht weder Kamera/Mikro noch Bildschirmzugriff – alles verweigern.
+  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
 }
 
 // ---- Start -----------------------------------------------------------------
 app.on('second-instance', () => showWindow());
-app.on('before-quit', () => { quitting = true; });
+let shuttingDown = false;
+app.on('before-quit', (e) => {
+  quitting = true;
+  if (!shuttingDown && engine && (engine.running || engine.starting || engine.proc)) {
+    e.preventDefault(); shuttingDown = true;
+    Promise.race([engine.stop(), new Promise((r) => setTimeout(r, 8000))]).finally(() => app.quit());
+  }
+});
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  try { if (video && video.proc) video.proc.kill(); } catch { /* egal */ }
   try { fs.rmSync(bufferDir, { recursive: true, force: true }); } catch { /* egal */ }
 });
 app.on('window-all-closed', () => { /* im Tray weiterlaufen */ });
@@ -493,12 +423,38 @@ app.whenReady().then(async () => {
   bufferDir = path.join(app.getPath('userData'), 'buffer');
   fs.rmSync(bufferDir, { recursive: true, force: true });
   fs.mkdirSync(bufferDir, { recursive: true });
-  video = new VideoCapture(ffmpeg, bufferDir);
-  video.on('crashed', (msg) => { state.videoActive = false; state.error = msg; toast(msg, 'error'); broadcastState(); });
-  video.on('stopped', () => { state.videoActive = video.running; broadcastState(); });
+  engine = new ObsEngine({
+    ffmpeg, dir: bufferDir, configBase: path.join(app.getPath('userData'), 'obs'),
+    obsRoots: [path.join(process.resourcesPath || '', 'obs')],
+    pidFile: path.join(app.getPath('userData'), 'obs.pid'),
+    log: (m) => { logLines.push(m.slice(0, 300)); if (logLines.length > 200) logLines.splice(0, 100); },
+  });
+  engine.cleanupStale();
+  engine.on('started', () => broadcastState());
+  engine.on('stopped', () => broadcastState());
+  engine.on('crashed', (msg) => {
+    logLines.push(`CRASH: ${msg}`);
+    if (!desired() || state.crashes >= 3) { state.error = `${msg} Aufnahme wurde beendet.`; toast(state.error, 'error'); broadcastState(); return; }
+    state.crashes++;
+    toast(`${msg} Neustart (${state.crashes}/3) …`, 'error');
+    state.engineKey = '';
+    setTimeout(() => syncEngine(), 3000 * state.crashes);
+  });
+  engine.on('overload', ({ ratio }) => {
+    if (engine.stepDown()) {
+      state.notice = engine.degrade === 1 ? 'PC stark ausgelastet – Clipper hat auf höchstens 30 FPS reduziert.' : 'PC stark ausgelastet – Clipper hat auf 720p/30 FPS reduziert.';
+      toast(state.notice, 'info');
+      state.engineKey = '';
+      syncEngine();
+    } else if (!state.notice || !/Notbremse/.test(state.notice)) {
+      state.notice = 'Notbremse: Der PC ist trotz minimaler Einstellungen stark ausgelastet. Aufnahme pausiert.';
+      toast(state.notice, 'error');
+      state.override = false; applyRecording();
+    }
+  });
   settingsStore.get();
   setupIpc();
-  setupCapture();
+  setupSecurity();
   createWindow();
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
   tray.on('click', () => showWindow());
@@ -506,15 +462,15 @@ app.whenReady().then(async () => {
   registerHotkey();
   applyStartup();
 
-  setInterval(() => pollGame().catch(() => {}), 8000);
-  setInterval(() => { if (win && win.isVisible() && !win.isMinimized()) broadcastState(); }, 1000);
-  pollGame().catch(() => {});
-
-  // Grafikkarten-Encoder im Hintergrund testen
-  exporter.detectEncoder(ffmpeg).then((enc) => {
+  // Grafikkarten-Encoder im Hintergrund testen (vor dem ersten Aufnahmestart abgewartet)
+  hwReady = exporter.detectEncoder(ffmpeg).then((enc) => {
     hwEncoder = enc === 'libx264' ? null : enc;
     encoder = cfg().encoder === 'cpu' ? 'libx264' : enc;
     broadcastState();
-    return video.probe(hwEncoder);
-  }).then(() => { broadcastState(); }).catch(() => {});
+  }).catch(() => {});
+
+  setInterval(() => pollGame().catch(() => {}), 8000);
+  setInterval(() => { if (win && win.isVisible() && !win.isMinimized()) broadcastState(); }, 1000);
+  setInterval(() => { if (engine.running) pruneBuffer(); }, 15000);
+  pollGame().catch(() => {});
 });

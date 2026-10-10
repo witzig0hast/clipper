@@ -24,17 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   listProcesses: () => ipcRenderer.invoke('processes:list'),
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
 
-  // Recorder (Renderer) <-> Main
-  saveSegment: (meta, buf) => ipcRenderer.invoke('segment:save', meta, buf),
-  reportRecorder: (status) => ipcRenderer.send('recorder:status', status),
   rendererReady: () => ipcRenderer.send('renderer:ready'),
-  onRecordingSet: on('recording:set'),
-  onFlush: (handler) => {
-    const fn = async (_e, token) => {
-      try { await handler(); } finally { ipcRenderer.send('flush:done', token); }
-    };
-    ipcRenderer.on('flush', fn);
-  },
 
   onState: on('state'),
   onClipSaved: on('clip:saved'),

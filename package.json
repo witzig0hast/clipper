@@ -11,10 +11,12 @@
     "test": "node --test test/pipeline.test.js",
     "icons": "node scripts/make-icons.js",
     "dist": "electron-builder --win nsis --x64 --publish never",
-    "dist:portable": "electron-builder --win portable --x64 --publish never"
+    "dist:portable": "electron-builder --win portable --x64 --publish never",
+    "integration": "node scripts/obs-integration.js"
   },
   "dependencies": {
-    "ffmpeg-static": "^5.3.0"
+    "ffmpeg-static": "^5.3.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "electron": "^44.5.1",
@@ -23,11 +25,26 @@
   "build": {
     "appId": "de.hastnetwork.clipper",
     "productName": "Clipper",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "assets/**/*", "package.json"],
-    "asarUnpack": ["node_modules/ffmpeg-static/**"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico"
     },
     "nsis": {
@@ -39,6 +56,12 @@
       "shortcutName": "Clipper",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "vendor/obs",
+        "to": "obs"
+      }
+    ]
   }
 }

@@ -15,6 +15,7 @@ function resolveFfmpeg() {
 function run(ffmpeg, args, { onProgress, totalSeconds, timeout } = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { windowsHide: true });
+    try { os.setPriority(proc.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* egal */ }
     const timer = timeout ? setTimeout(() => proc.kill(), timeout) : null;
     let err = '';
     let buf = '';
@@ -76,51 +77,38 @@ function videoArgs(encoder, { fps, bitrateMbps }) {
 
 function q(p) { return p.replace(/\\/g, '/').replace(/'/g, "'\\''"); }
 
-async function writeList(parts) {
-  const list = parts.map((p) => `file '${q(p.file)}'\noutpoint ${p.outpoint.toFixed(3)}`).join('\n');
-  const f = path.join(os.tmpdir(), `clipper-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.txt`);
-  await fs.promises.writeFile(f, list);
-  return f;
+/** Zeitpunkte (s) aller Keyframes einer Datei – es werden nur I-Frames dekodiert (sehr billig). */
+function keyframes(ffmpeg, file) {
+  return new Promise((resolve) => {
+    const p = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'info', '-skip_frame', 'nokey', '-i', file, '-an', '-vf', 'showinfo', '-f', 'null', '-'], { windowsHide: true });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d.toString(); });
+    p.on('error', () => resolve([]));
+    p.on('close', () => resolve([...err.matchAll(/pts_time:([\d.]+)/g)].map((m) => parseFloat(m[1]))));
+  });
 }
 
-/**
- * Baut aus Video-Segmenten (.ts) und Audio-Segmenten (.webm) eine MP4-Datei.
- * plan = { ws, we, video:{parts,firstFrom}, audio:{parts,firstFrom}|null }  (Zeiten in ms, Wanduhr)
- * Der Ton wird anhand der Wanduhrzeiten exakt zum Bild ausgerichtet.
- */
-async function exportClip(ffmpeg, plan, outFile, opts) {
-  const { fps = 60, bitrateMbps = 12, encoder = 'libx264', onProgress } = opts || {};
-  const { ws, we, video, audio } = plan;
-  const T = Math.max(ws, video.firstFrom);          // Nullpunkt des Clips
-  const dur = (we - T) / 1000;
-  if (dur < 0.2) throw new Error('Zu wenig Material im Puffer.');
-  const vSkip = (T - video.firstFrom) / 1000;
-  const lists = [await writeList(video.parts)];
-  const inputs = ['-f', 'concat', '-safe', '0', '-i', lists[0]];
-  let graph = `[0:v]trim=start=${vSkip.toFixed(3)}:duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,fps=${fps},format=yuv420p[v]`;
-  const maps = ['-map', '[v]'];
-  if (audio && audio.parts.length) {
-    lists.push(await writeList(audio.parts));
-    inputs.push('-f', 'concat', '-safe', '0', '-i', lists[1]);
-    const aSkip = Math.max(0, T - audio.firstFrom) / 1000;
-    const delay = Math.max(0, Math.round(audio.firstFrom - T));
-    graph += `;[1:a]atrim=start=${aSkip.toFixed(3)},asetpts=PTS-STARTPTS,aresample=48000`
-      + (delay ? `,adelay=${delay}|${delay}` : '') + ',apad[a]';
-    maps.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
-  } else {
-    maps.push('-an');
+async function exportClipCopy(ffmpeg, plan, outFile, opts = {}) {
+  let { parts, duration } = plan;
+  if (!parts.length || duration < 0.2) throw new Error('Zu wenig Material im Puffer.');
+  // Start auf den letzten Keyframe vor dem Wunschpunkt legen: Bild und Ton beginnen dann gemeinsam
+  if (parts[0].inpoint > 0.01) {
+    const kf = (await keyframes(ffmpeg, parts[0].file)).filter((t) => t <= parts[0].inpoint + 0.001);
+    const snapped = kf.length ? Math.max(...kf) : 0;
+    duration += parts[0].inpoint - snapped;
+    parts = [{ ...parts[0], inpoint: snapped }, ...parts.slice(1)];
   }
+  const list = parts.map((p) => `file '${q(p.file)}'${p.inpoint > 0.01 ? `\ninpoint ${p.inpoint.toFixed(3)}` : ''}`).join('\n');
+  const lf = path.join(os.tmpdir(), `clipper-${process.pid}-${Date.now()}.txt`);
+  await fs.promises.writeFile(lf, list);
   try {
     await run(ffmpeg, [
       '-hide_banner', '-loglevel', 'error', '-y', '-progress', 'pipe:1', '-nostats',
-      ...inputs, '-filter_complex', graph, ...maps,
-      ...videoArgs(encoder, { fps, bitrateMbps }),
-      '-t', dur.toFixed(3), '-movflags', '+faststart', outFile,
-    ], { onProgress, totalSeconds: dur });
-  } finally {
-    for (const l of lists) fs.promises.unlink(l).catch(() => {});
-  }
-  return dur;
+      '-f', 'concat', '-safe', '0', '-i', lf,
+      '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-avoid_negative_ts', 'make_zero', '-movflags', '+faststart', outFile,
+    ], { onProgress: opts.onProgress, totalSeconds: duration });
+  } finally { fs.promises.unlink(lf).catch(() => {}); }
+  return duration;
 }
 
 /** Schneidet einen vorhandenen Clip (Re-Encode für exakte Schnitte). */
@@ -145,4 +133,4 @@ async function makeThumbnail(ffmpeg, inFile, outFile, at = 1) {
   ]);
 }
 
-module.exports = { run, videoArgs, resolveFfmpeg, detectEncoder, exportClip, trimClip, makeThumbnail };
+module.exports = { keyframes, exportClipCopy, run, videoArgs, resolveFfmpeg, detectEncoder, trimClip, makeThumbnail };

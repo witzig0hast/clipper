@@ -5,10 +5,17 @@ on:
     branches: [main, 'claude/**']
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      obs_version:
+        description: 'OBS-Version (leer = neueste)'
+        required: false
 
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OBS_VERSION: ${{ inputs.obs_version || vars.OBS_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,7 +23,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: OBS Studio laden (Aufnahme-Motor)
+        shell: pwsh
+        run: ./scripts/fetch-obs.ps1
       - run: npm test
+      - name: Integrationstest mit echtem OBS
+        id: integration
+        continue-on-error: true
+        run: node scripts/obs-integration.js
       - run: npm run dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

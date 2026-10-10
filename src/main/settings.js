@@ -12,8 +12,8 @@ const defaults = () => ({
   bitrateMbps: 12,
   systemAudio: true,
   micAudio: false,
-  micDeviceId: '',
-  screenId: '',
+  screenIndex: -1,           // -1 = Hauptbildschirm
+  captureMode: 'auto',       // auto = Spiel + Bildschirm | game | display
   encoder: 'auto',         // auto = Grafikkarte wenn möglich | cpu
   games: DEFAULT_GAMES,
   hotkey: 'Alt+F10',
