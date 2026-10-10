@@ -424,7 +424,20 @@ class ObsEngine extends EventEmitter {
     await this.waitReady();
     const sources = await this.setupSources(c);
     await this.ws.request('StartStream', {}, 30000);
-    await this.seg.waitForData(sess, 30000);
+    // Schnell scheitern, wenn der Stream gar nicht erst läuft (z. B. Hardware-Encoder nicht nutzbar)
+    {
+      const began = Date.now(); const limit = enc.hw === 'x264' ? 30000 : 15000;
+      for (;;) {
+        if (this.seg.hasData(sess)) break;
+        if (sess.exited) throw new Error(this.seg.lastLog.trim().split('\n').pop() || 'Videoempfänger beendet');
+        if (Date.now() - began > 3500) {
+          const st = await this.ws.request('GetStreamStatus', {}, 3000).catch(() => null);
+          if (st && !st.outputActive && !st.outputReconnecting) throw new Error('OBS-Ausgabe wurde nicht gestartet (Encoder nicht nutzbar?).');
+        }
+        if (Date.now() - began > limit) throw new Error('Keine Videodaten von OBS empfangen (Zeitüberschreitung).');
+        await sleep(400);
+      }
+    }
     // Prüfen, dass wirklich der gewünschte Encoder läuft (eine unbekannte ID würde sonst still auf CPU/x264 fallen)
     const olog = this.readObsLog(200);
     if (enc.hw !== 'x264' && /\[x264 encoder: '(advanced|simple)_video_stream'\]/.test(olog)) throw new Error(`Hardware-Encoder (${enc.id}) wurde von OBS nicht verwendet.`);

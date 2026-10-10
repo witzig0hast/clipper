@@ -60,6 +60,16 @@ class Segmenter extends EventEmitter {
     clearTimeout(t);
   }
 
+  /** Non-blocking: sind schon Videodaten da? (setzt t0 beim ersten Mal) */
+  hasData(sess) {
+    if (sess.t0) return true;
+    try {
+      const st = fs.statSync(path.join(this.dir, `${sess.prefix}00000.ts`));
+      sess.t0 = st.birthtimeMs || st.ctimeMs;
+      return true;
+    } catch { return false; }
+  }
+
   /** Wartet, bis das erste Segment der aktuellen Session existiert (= Daten fließen). */
   waitForData(sess, timeoutMs) {
     const first = path.join(this.dir, `${sess.prefix}00000.ts`);
