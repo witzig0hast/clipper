@@ -115,7 +115,7 @@ function engineConfig() {
     testSource: SELFTEST,
   };
 }
-const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex, !!c.gameExe && engine && !engine.running ? c.gameExe : null]);
+const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex]); // gameExe bewusst nicht enthalten: Spielwechsel läuft live (setGame)
 
 // ---- Puffer ----------------------------------------------------------------
 function pruneBuffer() { engine.prune(cfg().bufferMinutes * 60, (f) => pinned.has(f)); }
