@@ -22,7 +22,7 @@ jobs:
           Get-ChildItem vendor/obs/obs-plugins/64bit -Filter *.dll | Where-Object { $_.Name -match 'nvenc|amf|qsv|ffmpeg|x264|capture' } | ForEach-Object { $_.Name }
           $checks = @(
             @('obs-nvenc.dll','obs_nvenc_h264_tex'), @('obs-nvenc.dll','jim_nvenc'),
-            @('enc-amf.dll','h264_texture_amf'), @('obs-qsv11.dll','obs_qsv11_v2'), @('obs-qsv11.dll','obs_qsv11'))
+            @('obs-ffmpeg.dll','h264_texture_amf'), @('obs-ffmpeg.dll','amd_amf_h264'), @('obs-qsv11.dll','obs_qsv11_v2'), @('obs-qsv11.dll','obs_qsv11'))
           foreach ($c in $checks) {
             $f = Get-ChildItem vendor/obs -Recurse -Filter $c[0] | Select-Object -First 1
             if (-not $f) { Write-Host "ENCODER_ID $($c[0]) $($c[1]): DATEI FEHLT"; continue }

@@ -55,3 +55,19 @@ test('verlustfreier Clip aus TS-Segmenten (Bild + Ton) startet auf Keyframe', as
   await E.makeThumbnail(ff, out, path.join(dir, 't.jpg'));
   assert.ok(fs.existsSync(path.join(dir, 't.jpg')));
 });
+
+test('OBS-Encoderliste aus dem Log lesen', () => {
+  const { parseEncoders, pickHardware } = require('../src/main/obs');
+  const log = [
+    '16:42:32.239: Available Encoders:', '16:42:32.239:   Video Encoders:',
+    '16:42:32.239: \t- obs_nvenc_h264_tex (NVIDIA NVENC H.264)', '16:42:32.239: \t- h264_texture_amf (AMD HW H.264)',
+    '16:42:32.239: \t- obs_x264 (x264)', '16:42:32.239:   Audio Encoders:', '16:42:32.239: \t- ffmpeg_aac (FFmpeg AAC)',
+  ].join('\n');
+  const ids = parseEncoders(log);
+  assert.deepStrictEqual(ids, ['obs_nvenc_h264_tex', 'h264_texture_amf', 'obs_x264']);
+  const hw = pickHardware(ids);
+  assert.strictEqual(hw.nvenc, 'obs_nvenc_h264_tex');
+  assert.strictEqual(hw.amd, 'h264_texture_amf');
+  assert.strictEqual(hw.qsv, null);
+  assert.deepStrictEqual(parseEncoders('Video Encoders:\n\t- obs_x264 (x264)\nAudio Encoders:\n\t- ffmpeg_aac (a)'), ['obs_x264']);
+});

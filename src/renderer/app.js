@@ -118,11 +118,13 @@ function renderState() {
     chip.textContent = `Aufnahme: ${encNames[cap.enc]}${soft ? ' – belastet die CPU' : ' (GPU)'}`;
     chip.style.color = soft ? 'var(--warn)' : 'var(--ok)';
   } else {
-    chip.textContent = s.hwEncoder ? `Grafikkarte: ${encNames[s.hwEncoder]}` : 'Encoder wird geprüft …';
-    chip.style.color = '';
+    const gpu = s.gpuEncoder === undefined ? undefined : s.gpuEncoder;
+    chip.textContent = gpu === undefined ? 'Encoder wird geprüft …' : gpu ? `Grafikkarte: ${encNames[gpu]}` : 'Keine Grafikkarten-Encoder gefunden';
+    chip.style.color = gpu === null ? 'var(--warn)' : '';
   }
-  $('#encHint').textContent = s.hwEncoder
-    ? `Erkannt: ${encNames[s.hwEncoder]}. „Automatisch“ nutzt die Grafikkarte für die Aufnahme – kaum FPS-Verlust.`
+  const gpuName = s.gpuEncoder ? encNames[s.gpuEncoder] : (s.gpuEncoder === undefined && s.hwEncoder ? encNames[s.hwEncoder] : null);
+  $('#encHint').textContent = gpuName
+    ? `Erkannt: ${gpuName}. „Automatisch“ nutzt die Grafikkarte für die Aufnahme – kaum FPS-Verlust.`
     : 'Keine Hardware-Encoder gefunden – der Prozessor wird genutzt (kann FPS kosten).';
   let noticeEl = $('#notice');
   const msg = !s.obsAvailable ? 'Aufnahme-Modul (OBS) fehlt – bitte Clipper neu installieren.' : s.notice;

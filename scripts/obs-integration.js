@@ -24,6 +24,12 @@ async function scenario(name, cfg, { clip = true } = {}) {
   const eng = new ObsEngine({ ffmpeg: ff, dir, configBase: path.join(base, 'cfg'), log: (m) => logs.push(m) });
   if (!eng.available) { fail('OBS wurde nicht gefunden'); return false; }
   console.log('OBS:', eng.obs.exe);
+  if (cfg.noDetect) eng.encoders = null;
+  else {
+    const det = await eng.detectEncoders();
+    console.log('Erkannte Encoder:', det ? `${det.ids.join(', ')} | Hardware: nvenc=${det.nvenc} amd=${det.amd} qsv=${det.qsv}` : 'keine Liste (ältere OBS-Version)');
+    if (process.platform === 'win32' && (!det || !det.ids.includes('obs_x264'))) { fail('Encoder-Erkennung lieferte keine Liste mit obs_x264'); return false; }
+  }
   const t0 = Date.now();
   try {
     await eng.start({ fps: 30, height: 720, bitrateMbps: 6, encoder: 'cpu', hw: null, systemAudio: true, micAudio: false, captureMode: 'auto', baseW: 1280, baseH: 720, monitorIndex: 0, ...cfg });
@@ -78,7 +84,7 @@ async function scenario(name, cfg, { clip = true } = {}) {
     const b = await scenario('Echte Quellen (Display + Spiel + Systemton) – informativ', { testSource: false }, { clip: false });
     console.log(`Szenario B (informativ): ${b ? 'OK' : 'nicht möglich auf diesem Rechner'}`);
     // Kaskade: Hardware-Encoder gewünscht, aber (auf Runner ohne GPU) nicht vorhanden -> muss sauber auf x264 zurückfallen
-    const c = await scenario('Hardware-Encoder nicht verfügbar -> Fallback (muss funktionieren)', { testSource: true, hw: 'nvenc', encoder: 'auto', expectFallback: true }, { clip: false });
+    const c = await scenario('Hardware-Encoder nicht verfügbar -> Fallback (muss funktionieren)', { testSource: true, hw: 'nvenc', encoder: 'auto', expectFallback: true, noDetect: true }, { clip: false });
     if (!c) fail('Szenario C (Fallback-Kaskade) fehlgeschlagen');
   }
 })().catch((e) => { console.log(e.stack); process.exit(1); });

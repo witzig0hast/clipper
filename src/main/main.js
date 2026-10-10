@@ -76,6 +76,7 @@ function publicState() {
     bufferMax: cfg().bufferMinutes * 60,
     encoder,
     hwEncoder,
+    gpuEncoder: engine.encoders ? (['nvenc', 'amd', 'qsv'].find((v) => engine.encoders[v]) || null) : undefined,
     capture: engine.running ? { enc: engine.encoder, mode: engine.encPlan && engine.encPlan.mode, id: engine.encPlan && engine.encPlan.id } : null,
     degrade: engine.degrade,
     notice: state.notice,
@@ -465,11 +466,15 @@ app.whenReady().then(async () => {
   applyStartup();
 
   // Grafikkarten-Encoder im Hintergrund testen (vor dem ersten Aufnahmestart abgewartet)
-  hwReady = exporter.detectEncoder(ffmpeg).then((enc) => {
-    hwEncoder = enc === 'libx264' ? null : enc;
-    encoder = cfg().encoder === 'cpu' ? 'libx264' : enc;
-    broadcastState();
-  }).catch(() => {});
+  hwReady = Promise.all([
+    exporter.detectEncoder(ffmpeg).then((enc) => {
+      hwEncoder = enc === 'libx264' ? null : enc;
+      encoder = cfg().encoder === 'cpu' ? 'libx264' : enc;
+      broadcastState();
+    }).catch(() => {}),
+    // OBS meldet selbst, welche Hardware-Encoder auf diesem PC funktionieren
+    engine.detectEncoders().then(() => broadcastState()).catch(() => {}),
+  ]);
 
   setInterval(() => pollGame().catch(() => {}), 8000);
   setInterval(() => { if (win && win.isVisible() && !win.isMinimized()) broadcastState(); }, 1000);

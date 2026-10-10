@@ -78,6 +78,29 @@ public class W { public delegate bool EP(IntPtr h, IntPtr l);
   } catch (e) { return [`(Fensterabfrage fehlgeschlagen: ${e.message})`]; }
 }
 
+/** Liest aus OBS' Logdatei, welche Video-Encoder auf diesem PC verfügbar sind ("Available Encoders"). */
+function parseEncoders(logText) {
+  const out = [];
+  const lines = String(logText).split(/\r?\n/);
+  let inVideo = false;
+  for (const l of lines) {
+    if (/Video Encoders:/.test(l)) { inVideo = true; continue; }
+    if (/Audio Encoders:/.test(l)) { inVideo = false; continue; }
+    if (inVideo) { const m = /-\s+([a-z0-9_]+)\s+\(/i.exec(l); if (m) out.push(m[1]); }
+  }
+  return out;
+}
+
+/** Aus der Liste die besten H.264-Hardware-Encoder je Hersteller wählen. */
+function pickHardware(ids) {
+  const first = (re) => ids.find((i) => re.test(i)) || null;
+  return {
+    nvenc: ['obs_nvenc_h264_tex', 'jim_nvenc', 'ffmpeg_nvenc'].find((i) => ids.includes(i)) || null,
+    amd: first(/^h264_texture_amf$|^amd_amf_h264$/),
+    qsv: ['obs_qsv11_v2', 'obs_qsv11'].find((i) => ids.includes(i)) || null,
+  };
+}
+
 const ENC_FALLBACK = { nvenc: 'NVIDIA NVENC', amd: 'AMD AMF', qsv: 'Intel QuickSync', x264: 'CPU (x264)' };
 
 class ObsEngine extends EventEmitter {
@@ -165,6 +188,8 @@ class ObsEngine extends EventEmitter {
     const dir = this.obsConfigDir();
     const prof = path.join(dir, 'basic', 'profiles', 'Clipper');
     fs.mkdirSync(prof, { recursive: true });
+    // Immer mit frischer Szene starten (alte Quellen würden das Anlegen blockieren)
+    try { fs.rmSync(path.join(dir, 'basic', 'scenes'), { recursive: true, force: true }); fs.rmSync(path.join(dir, 'basic', 'scenes.json'), { force: true }); } catch { /* egal */ }
     fs.mkdirSync(path.join(dir, 'basic', 'scenes'), { recursive: true });
     const win = process.platform === 'win32';
     // Auflösung: Arbeitsfläche = Monitor, Ausgabe = gewünschte Höhe (GPU-Skalierung, gleiches Seitenverhältnis)
@@ -275,7 +300,7 @@ class ObsEngine extends EventEmitter {
     const kinds = (await r('GetInputKindList')).inputKinds || [];
     const scene = (await r('GetSceneList')).currentProgramSceneName;
     const existing = (await r('GetInputList')).inputs || [];
-    for (const i of existing) if (String(i.inputName).startsWith('clipper-')) await r('RemoveInput', { inputName: i.inputName }).catch(() => {});
+    for (const i of existing) if (String(i.inputName).startsWith('clipper-')) await r('RemoveInput', { inputName: i.inputName }).catch((e) => this.log(`Entfernen von ${i.inputName} fehlgeschlagen: ${e.message}`));
     const made = [];
     const add = async (name, kind, settings) => {
       if (!kinds.includes(kind)) return false;
@@ -323,14 +348,61 @@ class ObsEngine extends EventEmitter {
     } finally { this.starting = false; }
   }
 
+  /**
+   * Startet OBS kurz (ohne aufzunehmen), liest die verfügbaren Encoder aus dessen Log und beendet es wieder.
+   * Ergebnis: { ids:[...], nvenc, amd, qsv } oder null (Erkennung fehlgeschlagen).
+   */
+  async detectEncoders(timeoutMs = 60000) {
+    if (!this.obs) return null;
+    if (this.running || this.starting || this.proc) return this.encoders || null;
+    try {
+      const ports = { ws: await freePort(), rtmp: await freePort(), password: crypto.randomBytes(8).toString('hex') };
+      this.stopping = true;
+      this.writeConfig({ fps: 30, bitrateMbps: 6, baseW: 1280, baseH: 720, height: 720 }, ports, { mode: 'adv', id: 'obs_x264', hw: 'x264' });
+      this.spawnObs(ports);
+      const began = Date.now();
+      let text = '';
+      while (Date.now() - began < timeoutMs) {
+        if (!this.proc) break;
+        text = this.readObsLog(400);
+        if (/Startup complete/.test(text)) break;
+        await sleep(300);
+      }
+      const ids = parseEncoders(text);
+      await this.killAll();
+      this.stopping = false;
+      if (!/Startup complete/.test(text) || !ids.length) { this.log('OBS meldet keine Encoderliste – nutze bekannte IDs.'); return null; } // ältere OBS-Versionen
+      this.encoders = { ids, ...pickHardware(ids) };
+      this.log(`OBS-Encoder: ${ids.join(', ')}`);
+      return this.encoders;
+    } catch (e) {
+      this.log(`Encoder-Erkennung fehlgeschlagen: ${e.message}`);
+      await this.killAll().catch(() => {});
+      this.stopping = false;
+      return null;
+    }
+  }
+
   /** Reihenfolge der Versuche: Hardware (erweitert → einfach), zuletzt CPU. */
   encoderPlans(c) {
     const plans = [];
-    if (c.encoder !== 'cpu' && c.hw) {
-      const newNv = this.obs.root && fs.existsSync(path.join(this.obs.root, 'obs-plugins', '64bit', 'obs-nvenc.dll'));
-      const advIds = { nvenc: newNv ? ['obs_nvenc_h264_tex', 'jim_nvenc'] : ['jim_nvenc', 'obs_nvenc_h264_tex'], amd: ['h264_texture_amf'], qsv: newNv ? ['obs_qsv11_v2', 'obs_qsv11'] : ['obs_qsv11', 'obs_qsv11_v2'] }[c.hw] || [];
-      for (const id of advIds) plans.push({ mode: 'adv', id, hw: c.hw });
-      plans.push({ mode: 'simple', id: c.hw, hw: c.hw, last: true });
+    if (c.encoder !== 'cpu') {
+      const det = this.encoders;
+      if (det) {
+        // OBS selbst sagt, welche Hardware-Encoder hier funktionieren
+        for (const vendor of ['nvenc', 'amd', 'qsv']) {
+          if (!det[vendor]) continue;
+          plans.push({ mode: 'adv', id: det[vendor], hw: vendor });
+          plans.push({ mode: 'simple', id: vendor, hw: vendor, last: true });
+          break;
+        }
+      } else if (c.hw) {
+        // Erkennung fehlgeschlagen: bekannte IDs der Reihe nach probieren
+        const newNv = this.obs.root && fs.existsSync(path.join(this.obs.root, 'obs-plugins', '64bit', 'obs-nvenc.dll'));
+        const advIds = { nvenc: newNv ? ['obs_nvenc_h264_tex', 'jim_nvenc'] : ['jim_nvenc', 'obs_nvenc_h264_tex'], amd: ['h264_texture_amf'], qsv: newNv ? ['obs_qsv11_v2', 'obs_qsv11'] : ['obs_qsv11', 'obs_qsv11_v2'] }[c.hw] || [];
+        for (const id of advIds) plans.push({ mode: 'adv', id, hw: c.hw });
+        plans.push({ mode: 'simple', id: c.hw, hw: c.hw, last: true });
+      }
     }
     plans.push({ mode: 'adv', id: 'obs_x264', hw: 'x264' });
     return plans;
@@ -419,4 +491,4 @@ class ObsEngine extends EventEmitter {
   }
 }
 
-module.exports = { ObsEngine, locateObs, listWindows, ENC_FALLBACK };
+module.exports = { ObsEngine, locateObs, listWindows, parseEncoders, pickHardware, ENC_FALLBACK };
