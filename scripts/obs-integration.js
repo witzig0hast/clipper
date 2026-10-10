@@ -35,6 +35,8 @@ async function scenario(name, cfg, { clip = true } = {}) {
     return false;
   }
   console.log(`gestartet nach ${Date.now() - t0} ms | Plan ${eng.encPlan.mode}/${eng.encPlan.id} | Quellen: ${(eng.sources || []).join(', ')}`);
+  const srcProblems = logs.filter((l) => /Quelle .*fehlgeschlagen|Start mit .*fehlgeschlagen/.test(l));
+  if (srcProblems.length) console.log('Hinweise:\n  ' + srcProblems.join('\n  '));
   const wins = listWindows(eng.proc && eng.proc.pid);
   if (wins.length) {
     console.log('Fenster von OBS:\n  ' + wins.join('\n  '));
@@ -60,6 +62,8 @@ async function scenario(name, cfg, { clip = true } = {}) {
     if (!/Audio: aac/.test(p.stderr)) { fail('Clip ohne AAC-Ton'); ok = false; }
     if (/(corrupt|Invalid data|error while decoding)/i.test(p.stderr)) { fail('Decode-Fehler im Clip'); ok = false; }
   } else if (eng.bufferedSeconds() < 5) { fail('Keine Daten im Puffer'); ok = false; }
+  if (cfg.expectFallback && eng.encPlan.id !== 'obs_x264') { fail(`Fallback erwartet, aber Plan ${eng.encPlan.id}`); ok = false; }
+  if (cfg.expectFallback) console.log(`Fallback-Ergebnis: Plan ${eng.encPlan.mode}/${eng.encPlan.id}, Grenzwerte: ${eng.cfgActive.fps} FPS / ${eng.cfgActive.height}p`);
   await eng.stop();
   console.log('gestoppt; OBS-Prozess beendet:', !eng.proc);
   if (!ok) console.log('--- OBS-Log (Ende) ---\n' + logs.slice(-40).join('\n'));
@@ -73,5 +77,8 @@ async function scenario(name, cfg, { clip = true } = {}) {
     // Echte Quellen: auf Runnern ohne Grafikkarte evtl. nicht möglich -> nur informativ
     const b = await scenario('Echte Quellen (Display + Spiel + Systemton) – informativ', { testSource: false }, { clip: false });
     console.log(`Szenario B (informativ): ${b ? 'OK' : 'nicht möglich auf diesem Rechner'}`);
+    // Kaskade: Hardware-Encoder gewünscht, aber (auf Runner ohne GPU) nicht vorhanden -> muss sauber auf x264 zurückfallen
+    const c = await scenario('Hardware-Encoder nicht verfügbar -> Fallback (muss funktionieren)', { testSource: true, hw: 'nvenc', encoder: 'auto', expectFallback: true }, { clip: false });
+    if (!c) fail('Szenario C (Fallback-Kaskade) fehlgeschlagen');
   }
 })().catch((e) => { console.log(e.stack); process.exit(1); });

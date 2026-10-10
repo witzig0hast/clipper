@@ -16,6 +16,7 @@ const exporter = require('./exporter');
 const { ObsEngine } = require('./obs');
 
 const APP_ID = 'de.hastnetwork.clipper';
+const SELFTEST = process.argv.includes('--selftest');   // CI: komplette App mit Testquelle durchspielen
 const ICON = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 
 // Die Oberfläche braucht keine GPU – so konkurriert Clipper nie mit dem Spiel um die Grafikkarte.
@@ -109,6 +110,7 @@ function engineConfig() {
     fps: s.fps, height: s.resolution === 'native' ? null : Number(s.resolution), bitrateMbps: s.bitrateMbps,
     encoder: s.encoder, hw: HW_MAP[hwEncoder] || null, systemAudio: s.systemAudio, micAudio: s.micAudio,
     captureMode: s.captureMode, baseW: d ? d.width : 1920, baseH: d ? d.height : 1080, monitorIndex: d ? d.index : 0,
+    testSource: SELFTEST,
   };
 }
 const engineKeyOf = (c) => JSON.stringify([c.fps, c.height, c.bitrateMbps, c.encoder, c.hw, c.systemAudio, c.micAudio, c.captureMode, c.baseW, c.baseH, c.monitorIndex]);
@@ -473,4 +475,35 @@ app.whenReady().then(async () => {
   setInterval(() => { if (win && win.isVisible() && !win.isMinimized()) broadcastState(); }, 1000);
   setInterval(() => { if (engine.running) pruneBuffer(); }, 15000);
   pollGame().catch(() => {});
+  if (SELFTEST) runSelftest().catch(() => app.exit(1));
 });
+
+/** Selbsttest der kompletten (installierten) App: aufnehmen -> Clip -> prüfen -> Ergebnis als JSON. */
+async function runSelftest() {
+  const out = process.env.CLIPPER_SELFTEST_OUT || path.join(app.getPath('userData'), 'selftest.json');
+  const res = { ok: false, steps: [], version: app.getVersion(), packaged: app.isPackaged, obs: engine.obs && engine.obs.exe, ffmpeg };
+  const step = (m) => { res.steps.push(`${new Date().toISOString()} ${m}`); };
+  try {
+    cfgPatchForSelftest();
+    state.override = true;
+    applyRecording();
+    await engineQueue;
+    if (!engine.running) throw new Error(state.error || 'Aufnahme startet nicht');
+    step(`Aufnahme läuft (${engine.encPlan.mode}/${engine.encPlan.id})`);
+    await new Promise((r) => setTimeout(r, 26000));
+    step(`Puffer ${engine.bufferedSeconds().toFixed(1)} s, Stats ${JSON.stringify(engine.stats)}`);
+    const info = await createClip(10);
+    step(`Clip ${info.file} (${info.duration.toFixed(1)} s)`);
+    const probe = require('child_process').spawnSync(ffmpeg, ['-i', info.file, '-f', 'null', '-'], { encoding: 'utf8' });
+    const m = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe.stderr);
+    const real = m ? +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]) : 0;
+    res.clipSeconds = real;
+    if (!(real >= 9 && real <= 14)) throw new Error(`Clip-Länge unplausibel: ${real}`);
+    if (!/Video: h264/.test(probe.stderr) || !/Audio: aac/.test(probe.stderr)) throw new Error('Clip ohne H.264/AAC');
+    res.ok = true;
+  } catch (e) { res.error = e.message; res.log = logLines.slice(-80); }
+  try { await engine.stop(); } catch { /* egal */ }
+  fs.writeFileSync(out, JSON.stringify(res, null, 2));
+  app.exit(res.ok ? 0 : 1);
+}
+function cfgPatchForSelftest() { settingsStore.update({ mode: 'manual', systemAudio: true, micAudio: false, encoder: 'cpu', fps: 30, resolution: '720', clipsDir: path.join(app.getPath('temp'), 'clipper-selftest-clips') }); }

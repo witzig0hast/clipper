@@ -34,6 +34,18 @@ jobs:
       - run: npm run dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Selbsttest der INSTALLIERTEN App (stille Installation, Aufnahme, Clip)
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/*.exe | Select-Object -First 1).FullName
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Clipper\Clipper.exe'
+          if (-not (Test-Path $exe)) { Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 1 | Select-Object -First 20 | ForEach-Object { Write-Host $_.FullName }; throw "Clipper.exe nicht installiert" }
+          $env:CLIPPER_SELFTEST_OUT = Join-Path $env:RUNNER_TEMP 'selftest.json'
+          $p = Start-Process -FilePath $exe -ArgumentList '--selftest','--hidden' -PassThru
+          if (-not $p.WaitForExit(150000)) { $p.Kill(); Write-Host 'Zeitüberschreitung' }
+          if (Test-Path $env:CLIPPER_SELFTEST_OUT) { Get-Content $env:CLIPPER_SELFTEST_OUT -Raw | Write-Host } else { Write-Host 'Kein Selbsttest-Ergebnis geschrieben' }
+          if ($p.ExitCode -ne 0) { throw "Selbsttest fehlgeschlagen (Exit $($p.ExitCode))" }
       - uses: actions/upload-artifact@v4
         with:
           name: Clipper-Setup

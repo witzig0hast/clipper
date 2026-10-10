@@ -16,4 +16,17 @@ jobs:
       - run: npm ci
       - shell: pwsh
         run: ./scripts/fetch-obs.ps1
+      - name: Encoder-IDs in der mitgelieferten OBS-Version prüfen
+        shell: pwsh
+        run: |
+          Get-ChildItem vendor/obs/obs-plugins/64bit -Filter *.dll | Where-Object { $_.Name -match 'nvenc|amf|qsv|ffmpeg|x264|capture' } | ForEach-Object { $_.Name }
+          $checks = @(
+            @('obs-nvenc.dll','obs_nvenc_h264_tex'), @('obs-nvenc.dll','jim_nvenc'),
+            @('enc-amf.dll','h264_texture_amf'), @('obs-qsv11.dll','obs_qsv11_v2'), @('obs-qsv11.dll','obs_qsv11'))
+          foreach ($c in $checks) {
+            $f = Get-ChildItem vendor/obs -Recurse -Filter $c[0] | Select-Object -First 1
+            if (-not $f) { Write-Host "ENCODER_ID $($c[0]) $($c[1]): DATEI FEHLT"; continue }
+            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($f.FullName))
+            Write-Host "ENCODER_ID $($c[0]) $($c[1]): $(if ($text.Contains($c[1])) {'GEFUNDEN'} else {'nicht gefunden'})"
+          }
       - run: node scripts/obs-integration.js
