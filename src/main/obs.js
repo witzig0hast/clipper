@@ -39,6 +39,26 @@ function locateObs(extraRoots = []) {
   return null;
 }
 
+/** Windows: Wächter-Prozess, der sichtbare Fenster von OBS sofort schließt (nie ein Fenster über dem Spiel!). */
+function guardWindows(pid, seconds = 120) {
+  if (process.platform !== 'win32' || !pid) return null;
+  const ps = `
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+public class G { public delegate bool EP(IntPtr h, IntPtr l);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(EP p, IntPtr l);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+ public static void Sweep(uint pid){ EnumWindows((h,l)=>{uint p; GetWindowThreadProcessId(h,out p); if(p==pid && IsWindowVisible(h)){ PostMessage(h,0x0010,IntPtr.Zero,IntPtr.Zero);} return true;}, IntPtr.Zero); } }
+"@
+$end = (Get-Date).AddSeconds(${seconds})
+while ((Get-Date) -lt $end) { if (-not (Get-Process -Id ${pid} -ErrorAction SilentlyContinue)) { break }; [G]::Sweep(${pid}); Start-Sleep -Milliseconds 400 }`;
+  const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps], { windowsHide: true, stdio: 'ignore' });
+  try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* egal */ }
+  return p;
+}
+
 /** Windows: Fenster eines Prozesses (sichtbar/unsichtbar, mit Titel) – zur Fehlersuche und Fensterprüfung. */
 function listWindows(pid) {
   if (process.platform !== 'win32' || !pid) return [];
@@ -128,6 +148,8 @@ class ObsEngine extends EventEmitter {
 
   // ---- Konfiguration -------------------------------------------------------
   obsConfigDir() {
+    // Windows (portabel): OBS liest ../../config relativ zu bin/64bit; sonst XDG_CONFIG_HOME/obs-studio
+    if (this.obs && this.obs.root) return path.join(this.obs.root, 'config', 'obs-studio');
     return path.join(this.configBase, 'obs-studio');
   }
 
@@ -149,7 +171,7 @@ class ObsEngine extends EventEmitter {
     const baseW = c.baseW || 1920, baseH = c.baseH || 1080;
     const outH = c.height && c.height < baseH ? c.height : baseH;
     const outW = Math.round((baseW * outH) / baseH / 2) * 2;
-    fs.writeFileSync(path.join(dir, 'global.ini'), [
+    const userIni = [
       '[General]', 'FirstRun=true', 'EnableAutoUpdates=false', 'ConfirmOnExit=false', 'MaxLogs=5',
       `ProcessPriority=${c.lowPriority === false ? 'Normal' : 'BelowNormal'}`, 'HotkeyFocusType=NeverDisableHotkeys', '',
       '[BasicWindow]', 'PreviewEnabled=false', 'SysTrayEnabled=true', 'SysTrayWhenStarted=true', 'SysTrayMinimizeToTray=true',
@@ -158,7 +180,9 @@ class ObsEngine extends EventEmitter {
       ...(win ? ['[Video]', 'Renderer=Direct3D 11', ''] : []),
       // obs-websocket ≤ 5.4 liest hier, neuere Versionen aus plugin_config/obs-websocket/config.json
       '[OBSWebSocket]', 'FirstLoad=false', 'ServerEnabled=true', `ServerPort=${ports.ws}`, 'AlertsEnabled=false', 'AuthRequired=true', `ServerPassword=${ports.password}`, '',
-    ].join('\n'));
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, 'global.ini'), userIni);   // OBS <= 30
+    fs.writeFileSync(path.join(dir, 'user.ini'), userIni);     // OBS >= 31
     const wsDir = path.join(dir, 'plugin_config', 'obs-websocket');
     fs.mkdirSync(wsDir, { recursive: true });
     fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify({
@@ -208,6 +232,7 @@ class ObsEngine extends EventEmitter {
     if (process.platform !== 'win32') env.XDG_CONFIG_HOME = this.configBase;
     this.proc = spawn(this.obs.exe, args, { cwd: this.obs.cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     if (this.pidFile) { try { fs.writeFileSync(this.pidFile, String(this.proc.pid)); } catch { /* egal */ } }
+    this.guard = guardWindows(this.proc.pid);
     this.proc.stdout.on('data', (d) => this.log(`[obs] ${d.toString().trim()}`));
     this.proc.stderr.on('data', (d) => this.log(`[obs!] ${d.toString().trim()}`));
     this.proc.on('close', (code) => {
@@ -361,6 +386,7 @@ class ObsEngine extends EventEmitter {
   async killAll() {
     clearInterval(this.statsTimer);
     if (this.ws) { try { this.ws.close(); } catch { /* egal */ } this.ws = null; }
+    if (this.guard) { try { this.guard.kill(); } catch { /* egal */ } this.guard = null; }
     const p = this.proc;
     if (p) {
       const closed = new Promise((r) => p.once('close', r));
